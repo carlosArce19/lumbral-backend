@@ -1,0 +1,237 @@
+Build Order & Sprint Plan – Java Backend MVP
+
+Purpose
+
+This document defines a practical build order and sprint plan to implement the Java backend MVP using all locked specifications.
+
+Goals:
+	•	Reduce integration risk
+	•	Deliver vertical slices that are testable early
+	•	Avoid rework by respecting locked boundaries
+
+Assumption:
+	•	1–2 backend developers
+	•	Monolith-first, modular structure
+	•	Frontend (Astro + Admin SPA) can start in parallel once Public/Admin APIs are available
+
+⸻
+
+Sprint 0 – Project & Infrastructure Setup (Foundation)
+
+Objective: Get the project runnable with guardrails.
+
+Deliverables
+	•	Spring Boot project skeleton
+	•	Module folder structure:
+	•	auth
+	•	tenancy
+	•	store
+	•	orders
+	•	payments
+	•	content-gateway
+	•	observability
+	•	events
+	•	Liquibase configured
+	•	Initial empty changelog folders per module
+	•	Neon Postgres connection via Hikari
+	•	Environment profiles: dev, prod
+
+Key tasks
+	•	Configure Liquibase with SQL changelogs
+	•	Configure logging (JSON + MDC placeholders)
+	•	Implement request filter:
+	•	traceId
+	•	MDC wiring
+	•	Health endpoint /actuator/health
+
+Exit criteria
+	•	App starts locally
+	•	Liquibase runs clean
+	•	Logs include traceId
+
+⸻
+
+Sprint 1 – Auth, Tenant, Membership (Critical Path)
+
+Objective: Secure access + tenant isolation.
+
+Deliverables
+	•	User, tenant, membership schema
+	•	Auth flows:
+	•	login
+	•	tenant selection
+	•	refresh (rotation)
+	•	logout
+	•	switch tenant
+	•	Invite-by-link
+	•	Password reset-by-link
+	•	Centralized authorization policy wired
+
+Key tasks
+	•	Implement TenantContext
+	•	JWT parsing & generation
+	•	Refresh token storage & rotation
+	•	Membership status enforcement
+	•	Integration tests:
+	•	tenant isolation
+	•	refresh reuse detection
+
+Exit criteria
+	•	Can log in, select tenant, refresh token
+	•	Disabled membership blocks access immediately
+
+⸻
+
+Sprint 2 – Store Module (Catalog Core)
+
+Objective: Products, categories, images, linked products.
+
+Deliverables
+	•	Store DB schema (products, categories, images, linked products)
+	•	CRUD APIs for:
+	•	categories
+	•	products
+	•	product images (R2)
+	•	linked products (pseudo-variants)
+	•	SKU generation service
+	•	CAP_STORE gating
+
+Key tasks
+	•	Implement tenant-scoped repositories
+	•	Implement R2 upload + metadata persistence
+	•	Validate primary-category constraint for linked products
+	•	Integration tests:
+	•	SKU uniqueness
+	•	tenant isolation
+
+Exit criteria
+	•	Admin can fully manage catalog
+	•	Images upload and display via public URLs
+
+⸻
+
+Sprint 3 – Public Catalog APIs (Astro dependency)
+
+Objective: Read-only catalog for storefront.
+
+Deliverables
+	•	Public endpoints:
+	•	categories
+	•	product list
+	•	product detail (with images + linked products)
+	•	Host-based tenant resolution
+	•	Pagination, filtering, sorting
+	•	Cache hooks (optional)
+
+Key tasks
+	•	Implement Host → tenant resolver
+	•	DTO mappers for public responses
+	•	Rate limiting on catalog endpoints (light)
+
+Exit criteria
+	•	Astro can render shop pages from API
+
+⸻
+
+Sprint 4 – Orders Core (Offline-first)
+
+Objective: Order lifecycle without PSP.
+
+Deliverables
+	•	Orders + order_items schema
+	•	Public checkout create order
+	•	Merchant Admin order list + detail
+	•	Fulfillment lifecycle:
+	•	NEW → CONFIRMED → FULFILLING → READY → COMPLETED
+	•	Offline payment marking
+
+Key tasks
+	•	Enforce fulfillment/payment gating rules
+	•	Snapshot product data into order_items
+	•	Audit events for order changes
+	•	Integration tests:
+	•	state transitions
+	•	offline payment flow
+
+Exit criteria
+	•	Full offline selling flow works
+
+⸻
+
+Sprint 5 – Payments Abstraction + Wompi
+
+Objective: Online payments for Pro-ready tenants.
+
+Deliverables
+	•	PaymentProvider abstraction
+	•	PaymentAttempt lifecycle
+	•	Wompi provider implementation
+	•	Webhook endpoint + signature verification
+	•	Idempotency
+
+Key tasks
+	•	Secret management for tenant PSP keys
+	•	Async webhook processing
+	•	Reconciliation edge cases
+	•	Integration tests with Wompi sandbox
+
+Exit criteria
+	•	Orders can be paid via Wompi
+	•	Webhook retries safe and idempotent
+
+⸻
+
+Sprint 6 – Content Gateway (Payload Integration)
+
+Objective: Site editing via Merchant Admin.
+
+Deliverables
+	•	Content Gateway module
+	•	Payload client integration
+	•	Site settings endpoints
+	•	Page edit endpoints
+	•	Audit logging for content changes
+
+Key tasks
+	•	Allowlist field mapping
+	•	TenantId enforcement
+	•	Cache invalidation hooks
+
+Exit criteria
+	•	Admin can edit site without accessing Payload
+
+⸻
+
+Sprint 7 – Observability, Hardening & Polish
+
+Objective: Production readiness.
+
+Deliverables
+	•	Metrics dashboards
+	•	Alerts (checkout, payment failures)
+	•	Rate limiting hardened
+	•	Dead-letter handling for webhooks
+
+Key tasks
+	•	Grafana dashboards
+	•	Alert tuning
+	•	Load testing checkout endpoints
+
+Exit criteria
+	•	System observable under load
+
+⸻
+
+Parallel Work (Can overlap sprints)
+	•	Frontend Admin SPA development once Sprint 1 APIs stabilize
+	•	Astro storefront once Sprint 3 APIs stabilize
+	•	Documentation & runbooks
+
+⸻
+
+Final Notes
+	•	Scheduling and Domain Management are intentionally deferred
+	•	Each sprint delivers a vertical slice
+	•	Avoid starting Wompi before offline orders are stable
+
+This plan is locked, realistic, and execution-focused.

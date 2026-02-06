@@ -1,0 +1,261 @@
+Roles & Permissions Spec (Java Backend – Centralized Policy)
+
+Scope
+
+This document locks the authorization model for the Merchant Admin (internal portal) and related backend APIs.
+
+It defines:
+	•	Roles: ADMIN, STAFF, EDITOR
+	•	Actions (permissions) as stable backend constants
+	•	Plan/module gating via Capabilities
+	•	Tenant isolation rules
+	•	Enforcement pattern: centralized policy (Option B)
+
+⸻
+
+1) Principles
+
+1.1 Tenant isolation is non-negotiable
+
+All permissions are evaluated within a tenant scope.
+
+A user may belong to multiple tenants, but:
+	•	A token is valid for exactly one tenant (the tenant that issued the token).
+	•	Every request must be authorized for the target {tenantId}.
+
+1.2 Centralized policy is the only authorization source of truth
+
+Controllers/services do not check roles directly.
+
+They call:
+	•	policy.require(authCtx, Action.X, TenantScope(tenantId))
+
+1.3 Roles are coarse; Actions are stable
+
+We do not authorize by endpoint name. We authorize by business action.
+
+1.4 Capabilities gate features by plan
+
+Even if a role allows an action, the tenant must have the required module enabled.
+
+⸻
+
+2) Roles (locked)
+
+ADMIN
+	•	Full access to everything in the tenant.
+	•	Only role allowed to manage: payment settings, domains, staff management, tenant settings, publishing.
+
+STAFF
+	•	Daily operations role.
+	•	Can manage: products, categories, pricing, product media, scheduling, orders/sales, refunds.
+	•	Cannot edit site pages and cannot publish.
+	•	Cannot modify sensitive tenant/platform settings.
+
+EDITOR
+	•	Content/site role.
+	•	Can edit predefined site/page data (via Merchant Admin “Site” UI).
+	•	Cannot publish.
+	•	No access to store, orders, scheduling, domains, payments, staff.
+
+⸻
+
+3) Action Catalog (locked)
+
+These are the canonical permission “verbs” used across the Java backend.
+
+3.1 Site
+	•	SITE_EDIT — edit site/pages via Merchant Admin UI
+	•	SITE_PUBLISH — publish content changes (admin-only)
+
+3.2 Store (Catalog)
+	•	PRODUCT_MANAGE — create/edit/archive products
+	•	CATEGORY_MANAGE — create/edit/archive categories and ordering
+	•	PRICING_MANAGE — set price (simple price_cents) and compare_at (if added later)
+	•	PRODUCT_MEDIA_MANAGE — upload/manage product images (Option A, Java owns images)
+
+3.3 Orders / Selling (ops)
+	•	ORDER_VIEW — view orders
+	•	ORDER_MANAGE — change order lifecycle states (excluding refunds if you prefer to separate)
+	•	REFUND_MANAGE — issue/refund actions (STAFF allowed)
+	•	SALE_CREATE — create “admin sale” / POS/manual order entry
+
+3.4 Scheduling (Pro)
+	•	SERVICE_MANAGE — manage services
+	•	BOOKING_MANAGE — manage bookings
+
+3.5 Admin/Platform Settings (sensitive)
+	•	PAYMENT_SETTINGS_MANAGE — configure Wompi keys, enable payment methods (admin-only)
+	•	DOMAIN_MANAGE — domain statuses, renewal ops (admin-only)
+	•	STAFF_MANAGE — invite/disable members, role changes (admin-only)
+	•	TENANT_SETTINGS_MANAGE — template/plan toggles, high-level settings (admin-only)
+
+⸻
+
+4) Role → Action Matrix (locked)
+
+ADMIN
+	•	Allowed actions: ALL (*) within the tenant
+
+STAFF
+
+Allowed:
+	•	Store: PRODUCT_MANAGE, CATEGORY_MANAGE, PRICING_MANAGE, PRODUCT_MEDIA_MANAGE
+	•	Orders/Selling: ORDER_VIEW, ORDER_MANAGE, SALE_CREATE, REFUND_MANAGE
+	•	Scheduling: SERVICE_MANAGE, BOOKING_MANAGE
+
+Not allowed:
+	•	Site: SITE_EDIT, SITE_PUBLISH
+	•	Admin settings: PAYMENT_SETTINGS_MANAGE, DOMAIN_MANAGE, STAFF_MANAGE, TENANT_SETTINGS_MANAGE
+
+EDITOR
+
+Allowed:
+	•	Site: SITE_EDIT
+
+Not allowed:
+	•	SITE_PUBLISH
+	•	All store/orders/scheduling/admin-settings actions
+
+⸻
+
+5) Capability Gating (plan/module enforcement)
+
+Capabilities are derived from tenant plan + add-ons.
+
+5.1 Capabilities (current)
+	•	CAP_SITE (effectively always enabled for all plans)
+	•	CAP_STORE (Mid / Pro)
+	•	CAP_SCHEDULING (Pro)
+
+5.2 Action → Capability rules (current)
+	•	Site:
+	•	SITE_EDIT → CAP_SITE
+	•	SITE_PUBLISH → CAP_SITE
+	•	Store:
+	•	PRODUCT_MANAGE, CATEGORY_MANAGE, PRICING_MANAGE, PRODUCT_MEDIA_MANAGE → CAP_STORE
+	•	Orders/Selling:
+	•	ORDER_VIEW, ORDER_MANAGE, REFUND_MANAGE, SALE_CREATE → CAP_STORE
+	•	Scheduling:
+	•	SERVICE_MANAGE, BOOKING_MANAGE → CAP_SCHEDULING
+	•	Admin settings:
+	•	capability gating optional; role gating is primary (admin-only)
+
+Example: STAFF might have SERVICE_MANAGE, but if the tenant is Mid (no scheduling), policy denies due to missing CAP_SCHEDULING.
+
+⸻
+
+6) Enforcement Architecture
+
+6.1 Required checks for every protected request
+
+Policy must enforce in this order:
+	1.	Tenant scope match
+	•	requested {tenantId} must match token tenant (or membership selection if multi-tenant)
+	2.	Membership status must be ACTIVE (hard deny otherwise)
+	3.	Role allows action
+	4.	Tenant has required capability
+
+6.2 Where enforcement happens
+	•	Service layer calls policy.require(...) (recommended)
+	•	Controllers remain thin
+	•	Optional: you can also use @PreAuthorize but it must delegate to policy; no inline role checks.
+
+⸻
+
+7) Multi-tenant Users (token scoping)
+	•	A user can have memberships in multiple tenants.
+	•	Login may require tenant selection.
+	•	Access token contains one tenantId, and authorization is evaluated only for that tenant.
+
+This avoids accidental cross-tenant operations.
+
+⸻
+
+8) Membership lifecycle and immediate lockout
+
+Membership status values:
+	•	INVITED
+	•	ACTIVE
+	•	DISABLED
+
+Rule (locked): If membership becomes DISABLED, user loses access immediately.
+	•	Policy must check membership status on each request (from DB/cache).
+
+⸻
+
+9) Refresh token rotation & security behaviors that interact with authorization
+
+While this is primarily auth/session, it impacts access control safety.
+	•	Access TTL: 15 minutes
+	•	Refresh TTL: 14 hours
+	•	Refresh rotation: enabled
+	•	No expiry warnings; user re-logins when refresh expires.
+
+Locked edge-case rules
+	1.	Membership disabled mid-session → access denied immediately (policy check)
+	2.	Refresh token reuse after rotation → treat as theft:
+	•	revoke all refresh tokens for {userId, tenantId}
+	•	clear cookie
+	•	return 401
+
+⸻
+
+10) Example endpoint → Action mappings (illustrative)
+
+Site (Editor/Admin):
+	•	PUT /tenants/{tenantId}/site/home → SITE_EDIT
+	•	POST /tenants/{tenantId}/site/publish → SITE_PUBLISH (admin only)
+
+Store (Staff/Admin, requires CAP_STORE):
+	•	POST /tenants/{tenantId}/products → PRODUCT_MANAGE
+	•	PUT /tenants/{tenantId}/products/{id} → PRODUCT_MANAGE
+	•	POST /tenants/{tenantId}/products/{id}/images → PRODUCT_MEDIA_MANAGE
+	•	POST /tenants/{tenantId}/categories → CATEGORY_MANAGE
+
+Orders/Selling (Staff/Admin, requires CAP_STORE):
+	•	GET /tenants/{tenantId}/orders → ORDER_VIEW
+	•	POST /tenants/{tenantId}/orders/{orderId}/status → ORDER_MANAGE
+	•	POST /tenants/{tenantId}/orders/{orderId}/refund → REFUND_MANAGE
+	•	POST /tenants/{tenantId}/sales → SALE_CREATE
+
+Scheduling (Staff/Admin, requires CAP_SCHEDULING):
+	•	POST /tenants/{tenantId}/services → SERVICE_MANAGE
+	•	POST /tenants/{tenantId}/bookings → BOOKING_MANAGE
+
+Admin Settings (Admin only):
+	•	PUT /tenants/{tenantId}/payments/wompi → PAYMENT_SETTINGS_MANAGE
+	•	POST /tenants/{tenantId}/staff/invite → STAFF_MANAGE
+	•	PUT /tenants/{tenantId}/domains/{domainId} → DOMAIN_MANAGE
+
+⸻
+
+11) Audit requirements (recommended baseline)
+
+For sensitive actions, write audit logs (tenantId/userId/role):
+	•	PAYMENT_SETTINGS_MANAGE
+	•	DOMAIN_MANAGE
+	•	STAFF_MANAGE
+	•	SITE_PUBLISH
+	•	REFUND_MANAGE
+	•	Order status changes (ORDER_MANAGE)
+
+This helps support and reduces fraud risk.
+
+⸻
+
+12) Final locked decisions summary
+	•	Centralized policy (Option B) is the sole authorization source
+	•	Roles: ADMIN (all), STAFF (ops + refunds + pricing), EDITOR (site edit only)
+	•	Publish: ADMIN only
+	•	Payment settings: ADMIN only
+	•	Capabilities gate modules by plan (store/scheduling)
+	•	Multi-tenant memberships allowed; token scoped to one tenant
+	•	Membership disabled → immediate access loss
+	•	Refresh rotation enabled; reuse triggers family revoke
+
+If you want next, I can format this into a “developer-ready” spec with:
+	•	the exact Action enum values,
+	•	the role-action map,
+	•	capability requirements map,
+	•	and the required audit events list as constants.

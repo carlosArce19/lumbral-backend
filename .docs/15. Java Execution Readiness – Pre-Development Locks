@@ -1,0 +1,146 @@
+Java Execution Readiness – Pre-Development Locks (MVP)
+
+Scope
+
+This document locks the remaining execution-grade decisions needed to start Java backend development safely and avoid churn.
+
+It builds on previously locked specs (Auth, Store, Orders, Payments, Payload Gateway, API conventions, Observability, Events).
+
+⸻
+
+1) Database Migrations & Schema Ownership (Locked)
+
+1.1 Tooling
+	•	Use Liquibase
+	•	Use one shared schema for the platform database
+	•	Use versioned SQL migrations (not XML/YAML)
+
+1.2 Organization
+	•	Migrations are grouped by module folders (logical ownership), e.g.:
+	•	db/changelog/auth/
+	•	db/changelog/store/
+	•	db/changelog/orders/
+	•	db/changelog/payments/
+	•	db/changelog/content/
+
+1.3 Rules
+	•	Never edit already-applied migrations.
+	•	Only append new migrations.
+	•	Every migration must be reversible where reasonably possible (optional for MVP).
+
+⸻
+
+2) Multi-Tenancy Enforcement Guardrails (Locked)
+
+2.1 TenantContext
+	•	A TenantContext is derived from the tenant-scoped access token.
+	•	TenantContext is available to service and repository layers.
+
+2.2 Tenant scoping rule
+	•	Every data-access query for tenant-owned entities MUST include tenant_id = <TenantContext.tenantId>.
+
+2.3 Path vs token tenantId enforcement
+	•	For Admin APIs: tenantId is in path and in token.
+	•	Hard rule: pathTenantId == tokenTenantId enforced by centralized policy.
+
+2.4 Testing requirement
+	•	Add integration tests proving that cross-tenant reads/writes are blocked.
+
+⸻
+
+3) Concurrency & Idempotency (Locked)
+
+3.1 Checkout idempotency
+	•	Public POST /api/public/v1/checkout/orders supports optional Idempotency-Key.
+	•	If provided, duplicate requests return the previously created order.
+
+3.2 Order state transitions
+	•	State transitions are enforced in a single DB transaction.
+	•	Invalid transitions return 409 conflict.
+
+3.3 Optimistic concurrency
+	•	Use one of:
+	•	a version column (optimistic locking), OR
+	•	transactional “compare-and-set” state transition checks
+
+MVP may start with state checks in transaction; versioning can be added later.
+
+⸻
+
+4) Media Handling (R2) Details (Locked)
+
+4.1 Allowed formats and limits
+	•	Supported formats: jpg, png, webp
+	•	Max upload size: 10 MB per image
+
+4.2 Processing
+	•	MVP stores original images only.
+	•	Resizing/thumbnails are deferred.
+
+4.3 Object key naming
+	•	R2 object keys are partitioned by tenant and entity:
+	•	tenant/{tenantId}/products/{productId}/{mediaAssetId}
+
+4.4 Access strategy
+	•	Public read via CDN/public URL.
+	•	Writes only via Java API.
+
+⸻
+
+5) Environments, Config, Secrets (Locked)
+
+5.1 Environments
+	•	Minimum environments: dev, prod (staging optional)
+
+5.2 Secrets
+	•	Secrets stored using environment secrets (Cloudflare secrets / platform secret store).
+	•	Never store secrets in DB as plaintext.
+
+5.3 Database connectivity
+	•	Neon Postgres via HikariCP with conservative pooling.
+	•	Timeouts and max connections tuned for low-cost MVP.
+
+5.4 CORS
+	•	Strict allowlist per environment.
+	•	Public APIs allow only necessary origins.
+
+⸻
+
+6) Background Jobs Execution Model (Locked)
+
+6.1 MVP execution
+	•	Async side effects handled via in-process executor.
+
+6.2 Reliability
+	•	Webhook processing accepts request quickly and processes asynchronously.
+	•	Failed processing uses retry with backoff.
+	•	Dead-letter storage for repeated failures is recommended.
+
+⸻
+
+7) Minimal Test Strategy (Locked)
+
+7.1 Required integration tests
+	•	Tenant isolation
+	•	Auth refresh rotation
+	•	Payment webhook idempotency
+	•	Order status transitions (confirm/fulfillment/cancel/refund)
+
+7.2 Tooling
+	•	Use Testcontainers for Postgres integration tests.
+	•	Maintain a “golden path” suite that runs in CI.
+
+⸻
+
+Final Summary
+
+All remaining pre-development execution decisions are now locked:
+	•	Liquibase versioned SQL migrations with module folders
+	•	TenantContext + strict tenant scoping guardrails
+	•	Checkout idempotency + safe order state transitions
+	•	R2 media constraints and naming conventions
+	•	Minimal environment/secrets/db configuration principles
+	•	In-process jobs + retry/dead-letter posture
+	•	Integration test minimum set with Testcontainers
+
+This document is locked and development-ready.

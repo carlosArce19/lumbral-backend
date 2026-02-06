@@ -1,0 +1,228 @@
+Internal Event Model (Monolith now, Kafka later) – Locked Specification
+
+Scope
+
+This document locks the internal event model for the modular monolith now (in-process via interfaces), with a clear path to Kafka later.
+
+It defines:
+	•	Event goals and boundaries
+	•	Which events exist per module
+	•	Where they are published
+	•	Sync vs async handling
+	•	Idempotency rules
+	•	After-commit publishing
+	•	Outbox timing decision
+
+⸻
+
+1) Goals & Semantics (Locked)
+
+1.1 Purpose
+
+Events are used to:
+	•	Decouple modules inside the monolith
+	•	Trigger side effects (notifications, cache purges, analytics-style counters)
+
+Audit logging remains DB-based as previously locked.
+
+1.2 Delivery semantics
+	•	Event handling is designed for at-least-once semantics.
+	•	Therefore handlers must be idempotent.
+
+⸻
+
+2) Transport & Wiring (Locked)
+
+2.1 Publisher style
+	•	Use per-module publisher interfaces (not a generic proxy bus).
+
+Examples:
+	•	OrderEvents
+	•	PaymentEvents
+	•	CatalogEvents
+	•	SiteEvents
+	•	AuthEvents
+
+2.2 Sync vs async
+	•	Sync for invariants when needed (rare): immediate, in-request.
+	•	Async for side effects (default): notifications, cache purges, webhooks dispatch, metrics.
+
+⸻
+
+3) Event Naming & Payload (Locked)
+
+3.1 Naming
+	•	Past tense domain events:
+	•	OrderConfirmed, PaymentSucceeded, ProductArchived
+
+Optional Kafka-friendly key naming:
+	•	order.confirmed, payment.succeeded (for later)
+
+3.2 Event payload strategy
+	•	Minimal payload is required to avoid coupling.
+
+All events include:
+	•	eventId (UUID)
+	•	occurredAt (UTC ISO timestamp)
+	•	tenantId (UUID)
+	•	actorUserId (UUID, nullable)
+	•	entityType (string)
+	•	entityId (UUID)
+	•	data (small JSON object)
+
+Consumers fetch additional detail from DB if needed.
+
+⸻
+
+4) Idempotency Rules (Locked)
+
+4.1 Primary rule
+	•	Every handler must be idempotent.
+
+4.2 Event identity
+	•	Every event has eventId = UUID.
+	•	For duplicate-prone side effects, events may include an idempotencyKey in data, e.g.:
+	•	ORDER:{orderId}:CONFIRMED:v1
+	•	PAYMENT_ATTEMPT:{attemptId}:PAID:v1
+
+4.3 Consumption tracking (minimal)
+
+For side effects that must not duplicate (emails, external webhooks):
+	•	Use a DB table to dedupe processing:
+
+CREATE TABLE event_consumptions (
+  id UUID PRIMARY KEY,
+  consumer_name TEXT NOT NULL,
+  event_id UUID NOT NULL,
+  processed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (consumer_name, event_id)
+);
+
+
+⸻
+
+5) Transaction Boundary: After-Commit Publishing (Locked)
+
+5.1 Publishing timing
+	•	Domain events are published after DB commit using transaction synchronization hooks.
+
+5.2 Rationale
+	•	Prevents: event emitted while DB transaction later rolls back.
+	•	Keeps behavior aligned with future outbox patterns.
+
+⸻
+
+6) Outbox Decision (Locked)
+
+6.1 MVP decision
+	•	No outbox in MVP.
+
+6.2 When outbox becomes required
+
+Implement outbox when:
+	•	Kafka (or another broker) is introduced, OR
+	•	You need guaranteed delivery across crashes for critical side effects.
+
+⸻
+
+7) Module Event Catalog (Locked)
+
+7.1 Orders module
+
+Published by OrderService (after commit):
+	•	OrderCreated
+	•	OrderConfirmed
+	•	OrderFulfillmentStatusChanged
+	•	OrderCancelled
+	•	OrderRefunded
+
+Common data examples:
+	•	status transitions: { "from": "NEW", "to": "CONFIRMED" }
+
+⸻
+
+7.2 Payments module
+
+Published by PaymentService (after commit):
+	•	PaymentAttemptCreated
+	•	PaymentSucceeded
+	•	PaymentFailed
+	•	PaymentRefunded
+
+Locked decision:
+	•	Payment service updates orders.payment_status directly (simplest MVP).
+	•	Events are still emitted for side effects.
+
+⸻
+
+7.3 Store/Catalog module
+
+Published by CatalogService (after commit):
+	•	ProductCreated
+	•	ProductUpdated
+	•	ProductArchived
+	•	CategoryCreated
+	•	CategoryUpdated
+	•	CategoryArchived
+	•	ProductImagesChanged
+	•	LinkedProductsUpdated
+
+⸻
+
+7.4 Site/Content Gateway module (Payload)
+
+Published by ContentGatewayService (after commit):
+	•	SiteSettingsUpdated
+	•	PageUpdated
+	•	SitePublished (future; optional now)
+
+⸻
+
+7.5 Auth/Membership module
+
+Published by AuthService/MembershipService (after commit):
+	•	UserInvited
+	•	InviteAccepted
+	•	MemberRoleChanged
+	•	MemberDisabled
+	•	PasswordResetRequested
+	•	PasswordResetCompleted
+
+⸻
+
+8) Side-effect Consumers (Locked)
+
+8.1 Notification module (minimal)
+	•	A minimal Notification module exists to consume:
+	•	invite/reset events
+	•	order/payment events (future customer notifications)
+
+Implementation can be:
+	•	Email provider later
+	•	Dev mode logs now
+
+8.2 Cache invalidation
+	•	Catalog and Site events trigger cache invalidation for public endpoints.
+
+⸻
+
+9) Kafka Migration Path (Locked)
+
+When moving to Kafka:
+	•	Keep event names and envelopes stable.
+	•	Replace in-process publisher implementations with Kafka producers.
+	•	Introduce Outbox for exactly-once-ish producer behavior.
+	•	Keep handler idempotency and event_consumptions table (or equivalent).
+
+⸻
+
+10) Final Locked Summary
+	•	Per-module event publisher interfaces
+	•	Minimal event payload envelope with tenant & actor correlation
+	•	At-least-once semantics → idempotent handlers required
+	•	After-commit publishing is mandatory
+	•	No outbox in MVP; implement when Kafka/guaranteed delivery becomes necessary
+	•	Locked event catalog across Orders, Payments, Catalog, Site, Auth
+	•	Notification module exists minimally; cache invalidation uses events
+
+This specification is locked and implementation-ready.

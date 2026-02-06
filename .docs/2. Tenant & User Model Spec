@@ -1,0 +1,371 @@
+Tenant & User Model Spec (Java Backend – Identity + Membership)
+
+Scope
+
+This document defines the identity, tenant membership, and session/token model for the Merchant Admin portal and backend APIs.
+
+It locks:
+	•	Users can belong to multiple tenants
+	•	Tokens are scoped to one tenant per session
+	•	Invite-by-link + reset-by-link workflows
+	•	Access token TTL 15 minutes
+	•	Refresh token TTL 14 hours
+	•	Refresh token rotation enabled
+	•	Security edge-case handling (membership disable, refresh reuse)
+
+⸻
+
+1) Principles
+
+1.1 Separation of concerns
+	•	User = global identity (email + password)
+	•	Tenant = business account
+	•	Membership = user’s role & status within a tenant
+
+1.2 Tenant-scoped sessions
+
+A user can have many memberships, but an access token always represents exactly one tenant context.
+
+Switching tenants requires issuing a new tenant-scoped token.
+
+1.3 Tokens are short-lived and safe for an internal portal
+	•	Access token: 15 minutes
+	•	Refresh token: 14 hours
+	•	No “session expiring soon” alerts; users re-login when refresh expires.
+
+⸻
+
+2) Entities & Relationships
+
+2.1 User
+
+Represents a human user with login credentials.
+
+Key properties:
+	•	Unique email address
+	•	Password hash (never store plaintext)
+	•	Status (active/disabled)
+
+2.2 Tenant
+
+Represents a merchant business account (your customer).
+
+Key properties:
+	•	Tenant identifier
+	•	Plan & features (used by authorization capability gating)
+
+2.3 TenantMembership
+
+Represents a user’s relationship to a tenant.
+
+Key properties:
+	•	Role: ADMIN / STAFF / EDITOR
+	•	Status: INVITED / ACTIVE / DISABLED
+	•	One membership per user per tenant (unique constraint)
+
+⸻
+
+3) Database Schema (Core Tables)
+
+3.1 users
+
+Purpose: global identities
+
+Minimum fields:
+	•	id (UUID, PK)
+	•	email (TEXT, unique, normalized lowercase)
+	•	password_hash (TEXT)
+	•	status (ACTIVE, DISABLED)
+	•	created_at, updated_at
+
+Recommended indexes:
+	•	unique index on email
+
+3.2 tenants
+
+Purpose: business accounts
+
+Minimum fields:
+	•	id (UUID, PK)
+	•	name (TEXT)
+	•	code (TEXT, unique) — used for SKU prefixes and human-friendly IDs (optional but recommended)
+	•	plan (BASIC, MID, PRO)
+	•	created_at, updated_at
+
+3.3 tenant_memberships
+
+Purpose: multi-tenant membership, roles
+
+Minimum fields:
+	•	id (UUID, PK)
+	•	tenant_id (UUID, FK → tenants.id)
+	•	user_id (UUID, FK → users.id)
+	•	role (ADMIN, STAFF, EDITOR)
+	•	status (INVITED, ACTIVE, DISABLED)
+	•	created_at, updated_at
+
+Constraints:
+	•	unique: (tenant_id, user_id)
+
+Indexes:
+	•	(user_id) for “which tenants does this user belong to”
+	•	(tenant_id) for “list tenant staff”
+
+⸻
+
+4) Session & Token Model
+
+4.1 Access token (JWT)
+
+Purpose: authorize API calls
+
+Properties:
+	•	TTL: 15 minutes
+	•	Included as Authorization: Bearer <token>
+
+Claims (minimum):
+	•	sub = userId
+	•	tenantId = selected tenant context
+	•	role = role within that tenant
+	•	iat, exp
+	•	optional: jti, membershipId
+
+Storage on client:
+	•	In memory (recommended for SPA)
+
+4.2 Refresh token (opaque)
+
+Purpose: obtain new access tokens without re-login
+
+Properties:
+	•	TTL: 14 hours
+	•	Stored server-side hashed in DB
+	•	Stored client-side as httpOnly secure cookie (recommended)
+
+Cookie properties:
+	•	HttpOnly; Secure; SameSite=Lax; Path=/auth/refresh
+
+Refresh rotation (locked)
+	•	Each successful refresh:
+	•	issues a new refresh token
+	•	revokes the prior one
+
+Fixed window behavior:
+	•	Refresh token expiry is a fixed 14-hour window (no UX alerts).
+
+⸻
+
+5) Refresh Token Storage (DB)
+
+5.1 refresh_tokens
+
+Purpose: server-side session tracking and rotation
+
+Fields:
+	•	id (UUID, PK)
+	•	user_id (UUID, FK → users.id)
+	•	tenant_id (UUID, FK → tenants.id)
+	•	token_hash (TEXT) — hash of opaque refresh token
+	•	expires_at (TIMESTAMPTZ)
+	•	revoked_at (TIMESTAMPTZ, nullable)
+	•	rotated_from_id (UUID, nullable, FK → refresh_tokens.id)
+	•	created_at (TIMESTAMPTZ)
+
+Indexes:
+	•	(user_id, tenant_id)
+	•	(expires_at)
+	•	unique on token_hash
+
+⸻
+
+6) Multi-tenant Login & Tenant Selection
+
+6.1 Login behavior
+
+A user logs in with email/password.
+
+System finds all ACTIVE memberships for that user.
+
+Cases:
+	1.	0 memberships → reject (or “no access”)
+	2.	1 membership → issue tenant-scoped access+refresh tokens
+	3.	>1 memberships → require tenant selection
+
+6.2 Tenant selection
+
+When multiple memberships exist, user selects which tenant to enter.
+
+Recommended: use a short-lived pre-auth token (~5 minutes) returned from login to authorize selection.
+
+After selection:
+	•	issue tenant-scoped access+refresh tokens for chosen tenant
+
+⸻
+
+7) Tenant Switching
+
+7.1 Switch tenant API
+
+User can switch tenant from inside the portal.
+
+Flow:
+	•	validate membership exists and is ACTIVE for target tenant
+	•	issue new tenant-scoped access token
+	•	rotate/replace refresh token for target tenant
+
+Recommended behavior:
+	•	revoke previous tenant’s refresh token on switch (clean separation)
+
+⸻
+
+8) Invite-by-link Flow
+
+8.1 Invite creation (admin-only)
+
+Admin invites staff/editor by email.
+
+Invite record stored and email link is generated.
+
+invites table
+
+Fields:
+	•	id (UUID, PK)
+	•	tenant_id
+	•	email
+	•	role (STAFF or EDITOR)
+	•	token_hash
+	•	expires_at
+	•	accepted_at (nullable)
+	•	created_by_user_id
+	•	created_at
+
+Constraints:
+	•	invite token single-use
+	•	expiry enforced (recommended 48h)
+
+8.2 Invite acceptance
+
+User clicks invite link with token.
+
+Acceptance behavior:
+	•	validate token and expiry, ensure not accepted
+	•	if user exists:
+	•	activate membership (or create if missing)
+	•	if user does not exist:
+	•	create user + set password
+	•	create membership as ACTIVE
+	•	mark invite accepted
+	•	issue tenant-scoped tokens immediately (user enters tenant)
+
+⸻
+
+9) Password Reset-by-link Flow
+
+9.1 Reset request
+
+User submits email.
+
+System response is always generic to prevent enumeration:
+	•	return { ok: true } always
+
+If user exists:
+	•	create reset token record
+	•	email reset link
+
+password_resets table
+
+Fields:
+	•	id (UUID, PK)
+	•	user_id
+	•	token_hash
+	•	expires_at
+	•	used_at (nullable)
+	•	created_at
+
+9.2 Reset confirmation
+
+User submits token + new password.
+
+Behavior:
+	•	validate token (not expired, not used)
+	•	update password hash
+	•	mark token used
+	•	revoke all refresh tokens for user (recommended)
+
+⸻
+
+10) Security & Edge Cases (Locked)
+
+10.1 Membership disabled mid-session
+
+Goal: immediate lockout.
+
+Rule:
+	•	If membership status becomes DISABLED, user loses access immediately (even if access token has time left).
+
+Implementation:
+	•	Central policy checks membership status on every request (DB or cached).
+	•	If not ACTIVE → deny.
+
+10.2 Refresh token reuse after rotation
+
+Goal: treat as token theft.
+
+Rule:
+	•	If a rotated (revoked) refresh token is presented again:
+	•	revoke all refresh tokens for that {userId, tenantId}
+	•	clear refresh cookie
+	•	return 401 forcing re-login
+
+⸻
+
+11) Recommended Endpoint Set (MVP)
+
+Auth:
+	•	POST /auth/login
+	•	POST /auth/select-tenant (for multi-tenant users)
+	•	POST /auth/refresh (rotation enabled)
+	•	POST /auth/logout
+	•	POST /auth/switch-tenant
+
+Invites:
+	•	POST /tenants/{tenantId}/staff/invite (admin-only)
+	•	POST /auth/invites/accept
+
+Password:
+	•	POST /auth/password/forgot
+	•	POST /auth/password/reset
+
+⸻
+
+12) Operational Notes
+
+12.1 Token hashing
+
+Always store hashes for:
+	•	refresh tokens
+	•	invite tokens
+	•	reset tokens
+
+Never store raw tokens.
+
+12.2 Audit logging (recommended)
+
+Log:
+	•	invite created/accepted
+	•	membership role changes
+	•	membership disabled/enabled
+	•	password resets
+	•	refresh reuse detection triggers
+
+⸻
+
+13) Final Locked Decisions Summary
+	•	Users can join multiple tenants via memberships
+	•	Access/refresh tokens are tenant-scoped (one tenant per session token)
+	•	Invite-by-link and reset-by-link are supported
+	•	Access TTL: 15 minutes
+	•	Refresh TTL: 14 hours
+	•	Refresh rotation enabled
+	•	Membership disabled → immediate access denial
+	•	Refresh token reuse after rotation → revoke tenant token family and force re-login

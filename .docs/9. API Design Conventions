@@ -1,0 +1,205 @@
+API Design Conventions – Locked Specification
+
+Scope
+
+This document locks the API design conventions for:
+	•	Merchant Admin (React SPA) ↔ Java
+	•	Public Site (Astro) ↔ Java
+	•	Webhooks ↔ Java
+
+Goals:
+	•	Prevent churn
+	•	Keep multi-tenant routing explicit and safe
+	•	Standardize error handling, pagination, filtering, and sorting
+
+⸻
+
+1) URL Patterns & Versioning (Locked)
+
+1.1 Base paths
+	•	Internal (Merchant Admin / authenticated): /api/v1/...
+	•	Public (Astro storefront / unauthenticated): /api/public/v1/...
+	•	Webhooks: /api/webhooks/... (versioning optional; default unversioned unless a breaking change is expected)
+
+1.2 Versioning strategy
+	•	URL versioning is used (e.g., /v1).
+	•	Any breaking change requires /v2.
+
+1.3 Resource path conventions
+	•	Nouns, plural resources: /products, /categories, /orders.
+	•	Use nested resources for tenant scoping.
+
+⸻
+
+2) Tenant Resolution & Scoping (Locked)
+
+2.1 Merchant Admin APIs (authenticated)
+	•	Standard path includes tenant:
+	•	/api/v1/tenants/{tenantId}/...
+	•	Token is tenant-scoped and includes tenantId.
+	•	Hard rule: pathTenantId == tokenTenantId enforced by centralized policy.
+
+2.2 Public APIs (Astro)
+
+Two supported resolution modes:
+	1.	Primary (production): Host-based resolution
+
+	•	Tenant resolved from the HTTP Host header (supports custom domains).
+	•	Public endpoints are typically:
+	•	/api/public/v1/catalog/...
+
+	2.	Fallback (development / diagnostics): tenantSlug in path
+
+	•	/api/public/v1/tenants/{tenantSlug}/catalog/...
+
+Both are supported; Host-based is the default.
+
+⸻
+
+3) ID Formats (Locked)
+	•	All entity IDs are UUIDs (tenants, users, products, categories, orders, payments, etc.).
+	•	Human-friendly identifiers are separate fields, not primary keys:
+	•	order_number (per-tenant sequence)
+	•	future: booking_number
+
+⸻
+
+4) Error Format (Locked)
+
+4.1 Standard error structure (RFC7807-like)
+
+All non-2xx responses return a consistent structure:
+
+{
+  "type": "https://yourdomain.com/problems/validation-error",
+  "title": "Validation error",
+  "status": 400,
+  "detail": "One or more fields are invalid.",
+  "instance": "/api/v1/tenants/.../products",
+  "traceId": "req-...",
+  "errors": [
+    { "field": "slug", "message": "Slug already exists." }
+  ]
+}
+
+4.2 traceId
+	•	traceId is included on all error responses.
+	•	Recommended: include traceId on success responses as a header (e.g., X-Trace-Id).
+
+4.3 Validation errors
+	•	Always include errors[] with field-level messages where applicable.
+
+⸻
+
+5) Pagination (Locked)
+
+5.1 Pagination type
+	•	Use offset pagination for MVP.
+
+5.2 Request parameters
+	•	page (1-based)
+	•	pageSize
+
+Defaults:
+	•	pageSize=20
+	•	max pageSize=100
+
+5.3 Response envelope
+
+List endpoints return:
+
+{
+  "data": [ ... ],
+  "page": 1,
+  "pageSize": 20,
+  "total": 182
+}
+
+Single-entity endpoints return the object directly (no data wrapper).
+
+⸻
+
+6) Filtering & Sorting (Locked)
+
+6.1 Filtering
+	•	Use query parameters.
+	•	Common patterns:
+	•	status=ACTIVE
+	•	categoryId=<uuid>
+	•	q=<searchTerm>
+
+6.2 Search
+	•	q is the standard parameter for search.
+
+6.3 Sorting
+	•	Use sort=field:direction
+	•	Direction is asc or desc.
+	•	Sorting fields must be allowlisted per endpoint.
+
+Examples:
+	•	?sort=createdAt:desc
+	•	?sort=priceCents:asc
+
+⸻
+
+7) Payload & Data Formatting Conventions (Locked)
+
+7.1 Enums
+	•	Enums are returned as UPPER_SNAKE_CASE strings.
+
+7.2 Timestamps
+	•	All timestamps are ISO-8601 and UTC.
+	•	Example: 2026-01-28T22:10:00Z
+
+7.3 Money
+	•	Money values use integer cents:
+	•	priceCents, totalCents
+	•	Currency uses ISO 4217:
+	•	currency: "COP"
+
+⸻
+
+8) Success Response Conventions (Locked)
+	•	Create endpoints typically return the created resource.
+	•	Update endpoints return the updated resource.
+	•	Delete endpoints return { "ok": true } or set a soft-delete/archived flag and return the resource.
+
+⸻
+
+9) Authentication Conventions (Locked)
+
+9.1 Admin APIs
+	•	Require Authorization: Bearer <accessToken>
+	•	Access token TTL: 15 minutes
+	•	Refresh token rotation: enabled (14-hour refresh TTL)
+
+9.2 Public APIs
+	•	No auth required by default.
+	•	Rate limiting recommended (especially for search endpoints).
+
+⸻
+
+10) Webhook Conventions (Locked)
+	•	Webhook endpoints live under /api/webhooks/...
+	•	Webhooks must be idempotent.
+	•	Webhook processing should record:
+	•	provider event ID (if available)
+	•	raw payload (optional)
+	•	processing outcome
+
+⸻
+
+11) Final Locked Summary
+	•	Admin base: /api/v1/...
+	•	Public base: /api/public/v1/...
+	•	Versioning via URL (/v1)
+	•	Admin tenant scoping via path + token; enforced equality
+	•	Public tenant resolution via Host, with tenantSlug fallback
+	•	UUID IDs everywhere; human sequences as separate fields
+	•	RFC7807-like error shape + traceId
+	•	Offset pagination page/pageSize/total (20 default, 100 max)
+	•	Filtering via query params; q for search
+	•	Sorting via sort=field:dir allowlisted
+	•	Enums UPPER_SNAKE_CASE; timestamps ISO-8601 UTC
+
+This specification is locked and implementation-ready.

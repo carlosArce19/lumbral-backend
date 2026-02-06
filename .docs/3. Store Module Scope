@@ -1,0 +1,345 @@
+Perfect. Below is the full, locked, developer-ready specification for:
+
+3) Store Module Scope (Java Backend – MVP + Future-Safe)
+
+This document defines what the Store module is, what it includes in MVP (Mid plan), what is explicitly excluded, and how it is designed to evolve (variants later, without rewrite).
+
+⸻
+
+1) Purpose of the Store Module
+
+The Store module is the commerce truth layer of the platform.
+
+It owns:
+	•	Products and categories
+	•	Pricing
+	•	Product images (Option A – Java owns images)
+	•	Public catalog APIs (read-only)
+	•	Merchant Admin CRUD APIs (write)
+	•	Store-related permissions and plan gating
+
+It does not own:
+	•	Marketing pages (Payload)
+	•	Checkout/payment execution logic (Payment module)
+	•	Orders lifecycle (Order module – specified later)
+
+⸻
+
+2) Plan Scope (Locked)
+
+2.1 Basic Plan
+	•	❌ No store
+	•	❌ No products
+	•	❌ No catalog APIs
+	•	✅ Website + content only
+
+2.2 Mid Plan (Store MVP)
+
+Includes everything in Basic, plus:
+	•	✅ Product management (no variants)
+	•	✅ Category management
+	•	✅ Product images
+	•	✅ Public catalog (read-only)
+	•	✅ Cart eligibility (order creation later)
+	•	✅ “Linked products” (pseudo-variants)
+	•	✅ Better templates on the frontend
+
+2.3 Pro Plan
+	•	Includes Mid
+	•	Adds scheduling, inventory, etc. (out of scope here)
+
+⸻
+
+3) Product Model (MVP – Locked)
+
+3.1 Core principles
+	•	No variants in MVP
+	•	One product = one sellable item
+	•	Product must support multiple industries (cosmetics, retail, services-as-products)
+	•	Strong tenant isolation
+	•	Designed to migrate to real variants later
+
+3.2 Product entity (summary)
+
+A Product represents one sellable item.
+
+Key characteristics:
+	•	Has its own SKU
+	•	Has one price
+	•	Has its own images
+	•	Belongs to one primary category
+	•	Can belong to multiple additional categories
+	•	Can be linked to other products (pseudo-variants)
+
+Key fields (conceptual)
+	•	id
+	•	tenant_id
+	•	status (DRAFT | ACTIVE | ARCHIVED)
+	•	name
+	•	slug (unique per tenant)
+	•	short_description
+	•	price_cents
+	•	currency (COP default)
+	•	sku (auto-generated, editable)
+	•	primary_category_id
+	•	attributes (jsonb, flexible)
+	•	timestamps
+
+⸻
+
+4) SKU Strategy (Locked)
+
+4.1 Why SKU exists (even without variants)
+
+SKU is required for:
+	•	Merchant operations
+	•	Receipts / invoices
+	•	Inventory later
+	•	Reporting
+	•	External integrations later
+
+4.2 Strategy
+	•	SKU is auto-generated on product creation
+	•	SKU can be edited/overwritten by merchant
+	•	SKU must be unique per tenant when present
+
+Generation model
+	•	Tenant has a short code (e.g. COCO)
+	•	SKU format example:
+
+COCO-000123
+
+
+	•	Sequence is per tenant
+
+This removes friction while still allowing merchants with existing SKUs to use their own.
+
+⸻
+
+5) Pricing Model (MVP – Locked)
+
+5.1 MVP pricing
+	•	✅ price_cents (single price)
+	•	❌ No discounts engine
+	•	❌ No price lists
+	•	❌ No variant pricing
+
+This supports:
+	•	Offline payments
+	•	Wompi integration later
+	•	Simple reporting
+
+5.2 Future-safe decisions
+	•	Pricing is stored at product level now
+	•	When variants are introduced, price migrates to variant level using a default variant
+
+⸻
+
+6) Category Model (Locked)
+
+6.1 Chosen approach
+
+✅ Primary category + additional categories
+
+This balances:
+	•	Simplicity
+	•	SEO
+	•	Navigation clarity
+	•	Merchandising flexibility
+
+6.2 Category entity
+
+Categories are tenant-scoped.
+
+Key characteristics:
+	•	Ordered (for menus)
+	•	Slug-based
+	•	Optional hierarchy (can be flat in MVP)
+
+Category fields (conceptual)
+	•	id
+	•	tenant_id
+	•	name
+	•	slug
+	•	description
+	•	sort_order
+	•	parent_id (optional)
+	•	status
+
+6.3 Product ↔ Category rules
+	•	Every product:
+	•	MAY have one primary category
+	•	MAY belong to many additional categories
+	•	Primary category:
+	•	Used for breadcrumbs
+	•	Used for canonical navigation
+	•	Additional categories:
+	•	Used for collections (Sale, Featured, etc.)
+
+⸻
+
+7) Product Images (Option A – Locked)
+
+7.1 Ownership
+	•	Images are owned by Java backend
+	•	Stored in Cloudflare R2
+	•	Metadata stored in DB
+
+7.2 Image model
+	•	Products can have multiple images
+	•	One image can be marked as primary
+	•	Images are ordered
+
+This supports:
+	•	Product galleries
+	•	Listing thumbnails
+	•	SEO alt text
+
+⸻
+
+8) Linked Products (Pseudo-Variants – Locked)
+
+This is the MVP workaround for variants.
+
+8.1 Concept
+	•	Each option (color/size/etc.) is a separate product
+	•	Products are grouped in a Variant Group
+	•	Frontend renders them as selectable options
+	•	Selecting an option navigates to another product page
+
+8.2 Constraints (very important)
+	•	All products in a group must:
+	•	Belong to the same tenant
+	•	Share the same primary category
+	•	A product belongs to at most one variant group (MVP)
+	•	Only one option dimension per group (Color OR Size)
+
+8.3 Variant Group entity
+
+Represents the “parent” concept.
+
+Fields:
+	•	id
+	•	tenant_id
+	•	name (e.g. “Coco Lipstick”)
+	•	option_name (e.g. “Color”)
+	•	timestamps
+
+8.4 Variant Group Items
+
+Links products into the group.
+
+Fields:
+	•	group_id
+	•	product_id
+	•	option_value (e.g. “Red”, “Nude”)
+	•	sort_order
+	•	is_default
+
+8.5 Why this is safe
+	•	No cart changes
+	•	No inventory complexity
+	•	No combinatorics
+	•	Easy migration to real variants later
+
+⸻
+
+9) Public Catalog APIs (Astro – Read Only)
+
+The frontend (Astro + React islands) consumes Java APIs for catalog data.
+
+9.1 Tenant resolution
+	•	Tenant resolved by domain or slug before hitting Store APIs
+
+9.2 Required endpoints (MVP)
+	•	GET /public/{tenant}/catalog/categories
+	•	GET /public/{tenant}/catalog/products
+	•	GET /public/{tenant}/catalog/products/{slug}
+
+Product detail response includes:
+	•	Product core data
+	•	Images
+	•	Primary category
+	•	Additional categories
+	•	Linked products (variant group payload if present)
+
+Payload CMS is not used for catalog truth.
+
+⸻
+
+10) Merchant Admin APIs (Write)
+
+Merchant Admin is the only place to manage store data.
+
+10.1 Required capabilities
+	•	All Store actions require CAP_STORE
+	•	Role enforcement:
+	•	ADMIN & STAFF only
+
+10.2 CRUD scope
+
+Merchant Admin supports:
+	•	Product create/edit/archive
+	•	Category create/edit/archive/order
+	•	Product images upload/reorder
+	•	Variant group linking (pseudo-variants)
+
+No bulk import/export in MVP (can be added later).
+
+⸻
+
+11) What Is Explicitly Out of Scope (MVP)
+
+These are intentionally excluded:
+	•	❌ Product variants (true variants)
+	•	❌ Inventory reservations
+	•	❌ Discount rules
+	•	❌ Coupons
+	•	❌ Shipping rules
+	•	❌ Tax engines
+	•	❌ Multi-currency
+	•	❌ Product bundles
+
+This keeps Mid MVP shippable and supportable.
+
+⸻
+
+12) Evolution Path (Important)
+
+12.1 Adding real variants later
+
+Planned, not blocked:
+	•	Introduce product_variants
+	•	Create default variant for each existing product
+	•	Migrate cart to reference variantId
+	•	Convert linked products into variants (optional)
+
+12.2 Why current design supports this
+	•	SKU already exists
+	•	Price exists
+	•	Images exist
+	•	Categories exist
+	•	Linked products already model “option groups”
+
+No rewrite required, only migration.
+
+⸻
+
+13) Final Locked Decisions Summary
+	•	Store is a separate module
+	•	Mid plan includes store
+	•	Products only (no variants)
+	•	SKU auto-generated but editable
+	•	Simple pricing
+	•	Primary + additional categories
+	•	Java owns product images
+	•	Linked products used as pseudo-variants
+	•	Astro consumes public catalog APIs
+	•	Merchant Admin manages all store data
+
+⸻
+
+If you want, next we can:
+	•	lock Order module scope
+	•	lock Scheduling module scope
+	•	or produce the full Java Store module API spec (endpoints + DTOs + permissions)

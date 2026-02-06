@@ -1,0 +1,376 @@
+Public API Contracts (Astro ↔ Java) – Locked Specification
+
+Scope
+
+This document locks the public (unauthenticated) API contracts consumed by the storefront (Astro + islands) for:
+	•	Site content (via Java → Payload gateway)
+	•	Store catalog (products, categories, images, linked products)
+	•	Checkout order creation (offline-first)
+	•	Payment initiation (Wompi later, optional in MVP)
+
+This spec follows the locked API Design Conventions:
+	•	Base: /api/public/v1/...
+	•	Offset pagination: page, pageSize, response { data, page, pageSize, total }
+	•	Filtering via query params, q for search, sort=field:dir
+	•	RFC7807-like errors with traceId
+	•	Enums UPPER_SNAKE_CASE, timestamps ISO-8601 UTC
+
+⸻
+
+1) Tenant Resolution (Locked)
+
+1.1 Primary (production): Host-based
+	•	Tenant is resolved from HTTP Host header.
+	•	Supports custom domains.
+
+1.2 Fallback (development / diagnostics): tenantSlug path
+	•	Alternate endpoints exist under:
+	•	/api/public/v1/tenants/{tenantSlug}/...
+
+1.3 Behavior when tenant cannot be resolved
+	•	Return 404 with problem response:
+	•	type: .../tenant-not-found
+
+⸻
+
+2) Public Site Content APIs (Java → Payload)
+
+2.1 Get site settings
+
+GET /api/public/v1/site/settings
+
+Response (example):
+
+{
+  "businessDisplayName": "Coco Cosmetics",
+  "logoUrl": "https://...",
+  "theme": {
+    "primaryColor": "#F6B6C8",
+    "secondaryColor": "#FFFFFF"
+  },
+  "contact": {
+    "phone": "+57...",
+    "email": "hello@...",
+    "address": "...",
+    "whatsapp": "https://wa.me/...",
+    "businessHoursText": "Mon–Sat 9am–6pm"
+  },
+  "socialLinks": {
+    "instagram": "...",
+    "facebook": "...",
+    "tiktok": "..."
+  },
+  "header": {
+    "navigationItems": [
+      { "label": "Shop", "href": "/shop" },
+      { "label": "About", "href": "/about" }
+    ]
+  },
+  "footer": {
+    "footerText": "...",
+    "footerLinks": [ { "label": "Contact", "href": "/contact" } ]
+  },
+  "seoDefaults": {
+    "siteTitle": "Coco Cosmetics",
+    "metaDescription": "...",
+    "ogImageUrl": "https://..."
+  }
+}
+
+
+⸻
+
+2.2 Get a predefined page
+
+GET /api/public/v1/site/pages/{pageType}
+
+Path params:
+	•	pageType: HOME | ABOUT | CONTACT | FAQ
+
+Response (example):
+
+{
+  "pageType": "HOME",
+  "hero": {
+    "title": "Glow with Coco",
+    "subtitle": "Premium cosmetics",
+    "imageUrl": "https://...",
+    "primaryCtaText": "Shop now",
+    "primaryCtaLink": "/shop"
+  },
+  "sections": [
+    { "type": "RICH_TEXT", "content": "..." },
+    { "type": "FEATURE_LIST", "title": "Why Coco", "items": ["..."] }
+  ],
+  "seo": {
+    "metaTitle": "Home – Coco Cosmetics",
+    "metaDescription": "...",
+    "ogImageUrl": "https://..."
+  }
+}
+
+
+⸻
+
+3) Public Catalog APIs (Store module)
+
+3.1 List categories
+
+GET /api/public/v1/catalog/categories
+
+Query params:
+	•	status (optional, default ACTIVE)
+
+Response:
+
+{
+  "data": [
+    { "id": "uuid", "name": "Makeup", "slug": "makeup", "sortOrder": 10 }
+  ],
+  "page": 1,
+  "pageSize": 100,
+  "total": 1
+}
+
+Notes:
+	•	For categories, server may ignore pagination and always return all ACTIVE categories (still wrapped).
+
+⸻
+
+3.2 List products
+
+GET /api/public/v1/catalog/products
+
+Query params (all optional):
+	•	page (default 1)
+	•	pageSize (default 20, max 100)
+	•	status (default ACTIVE)
+	•	primaryCategoryId (UUID)
+	•	categoryId (UUID) — matches additional categories too
+	•	q (search)
+	•	sort allowlist:
+	•	createdAt:desc|asc
+	•	priceCents:asc|desc
+	•	name:asc|desc
+
+Response (example):
+
+{
+  "data": [
+    {
+      "id": "uuid",
+      "name": "Lipstick – Red",
+      "slug": "lipstick-red",
+      "shortDescription": "...",
+      "priceCents": 45000,
+      "currency": "COP",
+      "primaryImageUrl": "https://...",
+      "primaryCategory": { "id": "uuid", "slug": "makeup", "name": "Makeup" },
+      "badges": ["NEW"]
+    }
+  ],
+  "page": 1,
+  "pageSize": 20,
+  "total": 182
+}
+
+
+⸻
+
+3.3 Get product detail
+
+GET /api/public/v1/catalog/products/{slug}
+
+Response includes:
+	•	Product core fields
+	•	Full image gallery
+	•	Primary + additional categories
+	•	Linked products (pseudo-variants) if present
+
+Response (example):
+
+{
+  "id": "uuid",
+  "name": "Lipstick – Red",
+  "slug": "lipstick-red",
+  "status": "ACTIVE",
+  "shortDescription": "...",
+  "priceCents": 45000,
+  "currency": "COP",
+  "sku": "COCO-000123",
+  "attributes": { "shade": "Red", "finish": "Matte" },
+  "primaryCategory": { "id": "uuid", "slug": "makeup", "name": "Makeup" },
+  "categories": [
+    { "id": "uuid", "slug": "sale", "name": "Sale" }
+  ],
+  "images": [
+    { "url": "https://...", "altText": "...", "sortOrder": 0, "isPrimary": true },
+    { "url": "https://...", "altText": "...", "sortOrder": 1, "isPrimary": false }
+  ],
+  "linkedProducts": {
+    "groupId": "uuid",
+    "optionName": "Color",
+    "items": [
+      { "label": "Red", "productSlug": "lipstick-red", "isActive": true },
+      { "label": "Nude", "productSlug": "lipstick-nude", "isActive": false },
+      { "label": "Pink", "productSlug": "lipstick-pink", "isActive": false }
+    ]
+  }
+}
+
+If product has no linked group:
+	•	linkedProducts is null.
+
+⸻
+
+4) Public Checkout APIs (Orders module)
+
+4.1 Checkout model (Locked MVP behavior)
+	•	Storefront maintains the cart client-side.
+	•	Public API creates an order from a cart payload.
+	•	Order starts in:
+	•	fulfillmentStatus = NEW
+	•	paymentStatus = UNPAID or PENDING depending on method
+	•	Merchant must confirm later in Merchant Admin.
+
+4.2 Create order (checkout)
+
+POST /api/public/v1/checkout/orders
+
+Request (example):
+
+{
+  "customer": {
+    "name": "Ana",
+    "phone": "+57...",
+    "email": "ana@email.com"
+  },
+  "fulfillment": {
+    "type": "DELIVERY",
+    "deliveryAddress": {
+      "line1": "Calle 123",
+      "line2": "Apt 4",
+      "city": "Bogotá",
+      "notes": "Call on arrival"
+    }
+  },
+  "payment": {
+    "method": "NEQUI"
+  },
+  "items": [
+    { "productId": "uuid", "quantity": 2 }
+  ]
+}
+
+Server responsibilities:
+	•	Validate products are ACTIVE and belong to tenant
+	•	Price is calculated server-side using current priceCents
+	•	Store snapshots into order_items
+	•	Create order with:
+	•	fulfillmentStatus = NEW
+	•	paymentStatus = PENDING for offline methods
+
+Response:
+
+{
+  "orderId": "uuid",
+  "orderNumber": "ORD-000123",
+  "currency": "COP",
+  "subtotalCents": 90000,
+  "totalCents": 90000,
+  "payment": {
+    "method": "NEQUI",
+    "status": "PENDING",
+    "instructions": {
+      "title": "Pay with Nequi",
+      "details": ["Send 90.000 COP to +57...", "Use reference ORD-000123"],
+      "reference": "ORD-000123"
+    }
+  },
+  "fulfillment": {
+    "type": "DELIVERY",
+    "status": "NEW"
+  },
+  "createdAt": "2026-01-29T00:00:00Z"
+}
+
+Errors:
+	•	400 validation errors (missing phone, invalid productId)
+	•	409 out-of-stock can be added later; MVP may skip strict stock enforcement
+
+⸻
+
+5) Optional: Payment initiation (Wompi)
+
+Wompi is supported via the payment provider abstraction and webhooks (not public).
+If enabled for a tenant, the storefront can initiate a payment session.
+
+5.1 Create a payment attempt for an order
+
+POST /api/public/v1/checkout/orders/{orderId}/payments
+
+Request:
+
+{
+  "provider": "WOMPI",
+  "returnUrl": "https://{tenantDomain}/checkout/complete"
+}
+
+Response (example):
+
+{
+  "paymentAttemptId": "uuid",
+  "provider": "WOMPI",
+  "status": "PENDING",
+  "clientParams": {
+    "publicKey": "...",
+    "amountInCents": 90000,
+    "currency": "COP",
+    "reference": "ORD-000123",
+    "signature": "..."
+  }
+}
+
+Notes:
+	•	Provider confirmation is webhook-driven (not public endpoints).
+
+⸻
+
+6) Rate Limiting (Locked)
+
+Public checkout endpoints must be rate limited:
+	•	/api/public/v1/checkout/orders
+	•	/api/public/v1/checkout/orders/*/payments
+
+Default thresholds (from Observability spec):
+	•	Per IP: 10 checkout attempts / 1 minute
+	•	Per tenant: 100 checkout attempts / 10 minutes
+
+Return 429 with Retry-After and include traceId.
+
+⸻
+
+7) Fallback Endpoints (tenantSlug)
+
+The following endpoints must exist for dev/fallback:
+	•	GET /api/public/v1/tenants/{tenantSlug}/site/settings
+	•	GET /api/public/v1/tenants/{tenantSlug}/site/pages/{pageType}
+	•	GET /api/public/v1/tenants/{tenantSlug}/catalog/categories
+	•	GET /api/public/v1/tenants/{tenantSlug}/catalog/products
+	•	GET /api/public/v1/tenants/{tenantSlug}/catalog/products/{slug}
+	•	POST /api/public/v1/tenants/{tenantSlug}/checkout/orders
+
+Behavior matches Host-based endpoints.
+
+⸻
+
+8) Final Locked Summary
+	•	Public APIs live under /api/public/v1/...
+	•	Tenant is resolved by Host header (primary) with tenantSlug fallback endpoints
+	•	Public content is served via Java gateway to Payload
+	•	Public catalog includes products, categories, images, and linked products
+	•	Checkout creates orders from client-side cart and returns offline instructions
+	•	Optional Wompi payment attempt initiation exists (provider confirmation via webhooks)
+	•	Rate limiting enforced on checkout endpoints
+
+This specification is locked and implementation-ready.

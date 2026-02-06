@@ -1,0 +1,264 @@
+Content Management Integration – Java ↔ Payload (Locked Specification)
+
+Scope
+
+This document fully locks item 7: Communication with Payload.
+
+It defines:
+	•	The chosen integration architecture (Java as middleware)
+	•	The “safe API” strategy
+	•	Which content lives in Payload
+	•	Which fields are editable from Merchant Admin
+	•	Roles & permissions for content editing
+	•	Read/write flows for Public Site and Merchant Admin
+
+This specification is implementation-ready and aligned with previously locked decisions.
+
+⸻
+
+1. Core Decision (Locked)
+
+1.1 Java acts as the sole middleware to Payload
+	•	Merchant Admin never talks directly to Payload
+	•	Public site never talks directly to Payload
+	•	Java exposes explicit, allowlisted endpoints
+	•	Java calls Payload using a service account
+
+This provides:
+	•	Strong tenant isolation
+	•	Field-level control
+	•	Auditing and observability
+	•	Freedom to replace Payload later without breaking the frontend
+
+⸻
+
+2. Architecture Overview
+
+Merchant Admin (React SPA)
+        |
+        v
+Java Backend (Content Gateway module)
+        |
+        v
+Payload CMS
+
+The Content Gateway is a dedicated Java module responsible only for content operations.
+
+⸻
+
+3. Safe API Strategy (Locked)
+
+3.1 Explicit allowlist only
+	•	No generic “proxy” or “pass-through” endpoints
+	•	Every field writable from Merchant Admin is explicitly mapped in Java DTOs
+
+3.2 Tenant scope enforced in Java
+	•	Every Payload read/write includes tenantId
+	•	Client cannot supply or override tenantId
+
+3.3 Payload service account
+	•	Java authenticates to Payload using a single service credential
+	•	Credential is stored securely (env/secret store)
+	•	No Payload credentials are ever exposed to the client
+
+3.4 Auditing
+	•	All content mutations are logged in the platform DB
+	•	Includes tenantId, userId, action, timestamp, and changed fields
+
+⸻
+
+4. Payload Data Model (MVP – Locked)
+
+4.1 tenant_site_settings (Singleton per tenant)
+
+Type: Payload Collection (not Global)
+
+Uniqueness: One document per tenantId
+
+Editable from Merchant Admin (EDITOR + ADMIN)
+	•	business_display_name
+	•	logo (media reference)
+	•	primary_color
+	•	secondary_color (optional)
+	•	contact:
+	•	phone
+	•	email
+	•	address
+	•	whatsapp
+	•	business_hours_text
+	•	social_links:
+	•	instagram
+	•	facebook
+	•	tiktok
+	•	header:
+	•	navigation_items (simple list)
+	•	footer:
+	•	footer_text
+	•	footer_links
+	•	seo_defaults:
+	•	site_title
+	•	meta_description
+	•	og_image
+
+Not editable from Merchant Admin
+	•	tenantId
+	•	template selection
+	•	plan flags
+	•	custom scripts / HTML
+
+⸻
+
+4.2 tenant_pages
+
+Type: Payload Collection
+
+Uniqueness: One document per (tenantId, pageType)
+
+Page types (MVP)
+	•	HOME
+	•	ABOUT
+	•	CONTACT
+	•	FAQ (optional)
+
+Editable fields (EDITOR + ADMIN)
+Each page uses a guided, form-based schema:
+	•	hero:
+	•	title
+	•	subtitle
+	•	image
+	•	primary_cta_text
+	•	primary_cta_link
+	•	sections (limited set):
+	•	rich_text
+	•	image_text
+	•	feature_list
+	•	testimonials (simple)
+	•	seo:
+	•	meta_title
+	•	meta_description
+	•	og_image
+
+Explicitly excluded
+	•	Arbitrary block builders
+	•	Custom HTML/CSS
+	•	Free-form layout editing
+
+⸻
+
+5. Roles & Permissions (Aligned with Locked Auth Spec)
+
+EDITOR
+	•	Allowed actions:
+	•	SITE_EDIT
+	•	Can:
+	•	Update site settings
+	•	Update page content
+	•	Cannot:
+	•	Publish
+	•	Access store/orders/scheduling
+
+ADMIN
+	•	Allowed actions:
+	•	SITE_EDIT
+	•	SITE_PUBLISH
+	•	Same edit rights as EDITOR
+	•	Responsible for publishing (when enabled)
+
+STAFF
+	•	No site/content permissions
+
+⸻
+
+6. Java API Endpoints (Locked)
+
+Merchant Admin (Write)
+	•	GET /tenants/{tenantId}/site/settings
+	•	PUT /tenants/{tenantId}/site/settings
+	•	GET /tenants/{tenantId}/site/pages/{pageType}
+	•	PUT /tenants/{tenantId}/site/pages/{pageType}
+
+Authorization:
+	•	SITE_EDIT required for PUT
+	•	SITE_EDIT required for GET (or read-only allowed if desired)
+
+⸻
+
+Public Site (Read-only)
+	•	GET /public/{tenant}/site/settings
+	•	GET /public/{tenant}/site/pages/{pageType}
+
+Notes:
+	•	Public endpoints return only published content
+	•	Tenant is resolved by domain/slug
+
+⸻
+
+7. Publishing Model (Locked – MVP)
+
+MVP approach
+	•	No draft vs publish separation
+	•	Updates go live immediately
+	•	SITE_PUBLISH action is a no-op or cache purge
+
+Future evolution (explicitly supported)
+	•	Draft content stored separately
+	•	Admin-only publish promotes draft → published
+	•	Public site reads published only
+
+No schema rewrite required to add this later.
+
+⸻
+
+8. Caching & Resilience
+
+Caching (recommended)
+	•	Java may cache Payload reads per tenant/page
+	•	Cache invalidation triggered on content update
+
+Failure handling
+	•	Payload read failure → return last cached content if available
+	•	Payload write failure → return error, no partial updates
+
+⸻
+
+9. Audit Logging (Locked)
+
+Every content change must record:
+	•	tenantId
+	•	userId
+	•	action (UPDATE_SITE_SETTINGS, UPDATE_PAGE_HOME, etc.)
+	•	Payload document ID
+	•	timestamp
+	•	changed fields summary
+
+Audit logs live in the platform DB (not Payload).
+
+⸻
+
+10. Security Guarantees
+	•	Merchant never sees Payload Admin UI
+	•	Merchant never sees Payload IDs or credentials
+	•	TenantId cannot be spoofed by client
+	•	Field-level access strictly controlled in Java
+
+⸻
+
+11. Explicitly Out of Scope (MVP)
+	•	Direct Payload access for merchants
+	•	Custom scripts or CSS injection
+	•	Page builders
+	•	Multi-language content
+	•	Content versioning UI
+
+⸻
+
+12. Final Locked Summary
+	•	Java is the only gateway to Payload
+	•	Payload is used strictly for content storage
+	•	Merchant Admin edits content via simple forms
+	•	Only allowlisted fields are editable
+	•	EDITOR and ADMIN can edit content
+	•	Publish is ADMIN-only (future)
+	•	Public site reads content via Java APIs
+
+This specification is locked and implementation-ready.

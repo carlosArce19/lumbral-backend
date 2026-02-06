@@ -1,0 +1,271 @@
+Orders & Fulfillment Workflow – Locked Specification
+
+Scope
+
+This document fully locks item 4: Orders & Fulfillment workflow for the Java backend.
+
+It defines:
+	•	Order lifecycle (fulfillment)
+	•	Payment lifecycle (aligned with previously locked payment decisions)
+	•	Interaction rules between payment and fulfillment
+	•	Merchant Admin operational capabilities
+	•	Minimum data model requirements
+
+Out of scope (intentionally deferred):
+	•	Shipping rates engine
+	•	Tax engine
+	•	Inventory reservations
+	•	Partial refunds / returns
+	•	Advanced logistics integrations
+
+⸻
+
+1. Core Principles (Locked)
+
+1.1 Separate lifecycles
+
+Orders have two independent but related state machines:
+	•	Payment status (money)
+	•	Fulfillment status (operational execution)
+
+This separation is mandatory to support offline payments and manual confirmation.
+
+1.2 Offline-first design
+
+The workflow must fully support:
+	•	Cash
+	•	Nequi
+	•	Bank transfer
+
+with merchant-controlled validation.
+
+1.3 Tenant & permission safety
+	•	All order actions are tenant-scoped
+	•	Authorization enforced via centralized policy
+	•	Only ADMIN and STAFF can manage orders
+	•	STAFF is allowed to refund
+
+⸻
+
+2. Payment Workflow (Locked)
+
+2.1 Supported payment methods (MVP)
+	•	CASH
+	•	NEQUI
+	•	BANK_TRANSFER
+	•	WOMPI (online PSP, merchant-owned accounts)
+
+⸻
+
+2.2 Payment status states (Locked)
+
+Status	Meaning
+UNPAID	Order created, no payment initiated
+PENDING	Customer instructed to pay / payment attempt created
+WAITING_CONFIRMATION	Optional review state (offline proof submitted)
+PAID	Payment confirmed (merchant or PSP webhook)
+FAILED	Online payment failed
+REFUNDED	Full refund completed
+
+Notes:
+	•	Offline payments typically go PENDING → PAID
+	•	Wompi transitions are webhook-driven and authoritative
+
+⸻
+
+3. Fulfillment Workflow (Locked)
+
+3.1 Fulfillment type (per order)
+	•	PICKUP
+	•	DELIVERY
+	•	DIGITAL (future)
+
+⸻
+
+3.2 Fulfillment status states (Locked)
+
+Status	Meaning
+NEW	Order placed by customer
+CONFIRMED	Merchant explicitly accepted the order
+FULFILLING	Order being prepared
+READY	Ready for pickup or out for delivery
+COMPLETED	Delivered or picked up
+CANCELLED	Cancelled before completion
+
+Locked decisions
+	•	CONFIRMED step is required (merchant must confirm order)
+	•	READY is used instead of OUT_FOR_DELIVERY
+
+⸻
+
+4. Interaction Rules: Payment vs Fulfillment (Locked)
+
+4.1 Gating rules by payment method
+
+Nequi / Bank Transfer
+	•	Fulfillment cannot move to FULFILLING unless payment is PAID
+
+Cash
+Two supported behaviors (merchant setting):
+	•	Cash on pickup/delivery (default)
+	•	Fulfillment may proceed while payment is PENDING
+	•	Payment becomes PAID when cash is received
+	•	Cash requires prepayment
+	•	Same gating as transfer payments
+
+⸻
+
+4.2 Cancellation rules
+	•	If fulfillment_status == COMPLETED → cancellation not allowed
+	•	If cancelled after payment → refund required
+
+⸻
+
+5. Merchant Admin Capabilities (Locked)
+
+5.1 Order list
+
+Filters:
+	•	Date range
+	•	Payment status
+	•	Fulfillment status
+	•	Payment method
+	•	Fulfillment type
+
+⸻
+
+5.2 Order detail view
+
+Displays:
+	•	Order items (product snapshots)
+	•	Totals
+	•	Customer contact info
+	•	Delivery details (if applicable)
+	•	Payment method + status
+	•	Payment proof (offline)
+	•	Audit timeline
+
+⸻
+
+5.3 Allowed actions (ADMIN & STAFF)
+	•	Confirm order (NEW → CONFIRMED)
+	•	Update fulfillment status (CONFIRMED → FULFILLING → READY → COMPLETED)
+	•	Mark payment as paid (offline)
+	•	Upload/view payment proof
+	•	Cancel order (with reason)
+	•	Refund order (full refund only, MVP)
+
+Permissions:
+	•	Requires ORDER_MANAGE
+	•	Refund requires REFUND_MANAGE
+
+⸻
+
+6. Refund Workflow (Locked)
+
+6.1 Refund scope (MVP)
+	•	Full refunds only
+	•	No partial refunds
+
+6.2 Refund handling
+	•	Offline payments: merchant performs refund externally and records it
+	•	Wompi: PSP refund API used later; system records result
+
+Refund action sets:
+	•	payment_status = REFUNDED
+	•	Creates refund/audit event
+
+⸻
+
+7. Minimum Data Model (Locked)
+
+7.1 orders
+
+Required fields:
+	•	id
+	•	tenant_id
+	•	order_number (per-tenant sequence)
+	•	currency (COP)
+	•	subtotal_cents
+	•	total_cents
+	•	payment_method
+	•	payment_status
+	•	fulfillment_type
+	•	fulfillment_status
+	•	customer_name
+	•	customer_phone (required)
+	•	customer_email (optional)
+	•	Delivery fields (nullable)
+	•	notes_internal
+	•	cancel_reason
+	•	timestamps
+
+⸻
+
+7.2 order_items
+	•	id
+	•	tenant_id
+	•	order_id
+	•	product_id
+	•	Snapshot fields:
+	•	product_name_snapshot
+	•	product_sku_snapshot
+	•	unit_price_cents_snapshot
+	•	quantity
+	•	line_total_cents
+
+⸻
+
+7.3 payment_attempts
+	•	Links orders to OFFLINE/WOMPI attempts
+	•	Stores provider references and raw webhook payloads
+
+⸻
+
+7.4 order_events (audit log – required)
+	•	id
+	•	tenant_id
+	•	order_id
+	•	actor_user_id (nullable)
+	•	event_type
+	•	from_value
+	•	to_value
+	•	note
+	•	created_at
+
+⸻
+
+8. Public Checkout Responsibilities (Locked)
+
+Public site (Astro + islands) must:
+	•	Create order + order items
+	•	Select payment method
+	•	Display payment instructions (offline)
+	•	Initiate Wompi payment when enabled
+
+Public site never changes fulfillment or payment status.
+
+⸻
+
+9. What Is Explicitly Out of Scope (MVP)
+	•	Partial refunds
+	•	Returns/exchanges
+	•	Shipping cost calculation
+	•	Tax calculation
+	•	Inventory reservations
+	•	Delivery tracking
+
+⸻
+
+10. Final Locked Summary
+	•	Orders and payments have separate lifecycles
+	•	Offline and online payments fully supported
+	•	Merchant must CONFIRM orders
+	•	READY state is used (no OUT_FOR_DELIVERY)
+	•	Cash orders can be fulfilled before payment
+	•	Transfers require payment before fulfillment
+	•	Full refunds only in MVP
+	•	STAFF can refund
+	•	All actions audited
+
+This specification is locked and implementation-ready.

@@ -1,0 +1,581 @@
+Merchant Admin API Contracts (React SPA ↔ Java) – Locked Specification
+
+Scope
+
+This document locks the authenticated API contracts used by the Merchant Admin (React SPA) for:
+	•	Authentication & tenant selection
+	•	Staff management (invite/reset)
+	•	Site editing (Java → Payload gateway)
+	•	Store management (products, categories, images, linked products)
+	•	Order operations (confirm, fulfill, mark paid, refund)
+
+This spec follows the locked API Design Conventions:
+	•	Base: /api/v1/...
+	•	Tenant scoping: /api/v1/tenants/{tenantId}/... and must match token tenantId
+	•	Offset pagination with { data, page, pageSize, total }
+	•	Filtering via query params, search q, sorting sort=field:dir
+	•	RFC7807-like errors with traceId
+
+⸻
+
+1) Authentication & Session APIs
+
+1.1 Login
+
+POST /api/v1/auth/login
+
+Request:
+
+{ "email": "user@x.com", "password": "..." }
+
+Response (one membership):
+
+{
+  "mode": "SIGNED_IN",
+  "tenant": { "tenantId": "uuid", "name": "Coco Cosmetics" },
+  "accessToken": "jwt",
+  "accessTokenExpiresInSeconds": 900
+}
+
+Response (multiple memberships):
+
+{
+  "mode": "TENANT_SELECTION_REQUIRED",
+  "preAuthToken": "jwt-preauth",
+  "tenants": [ { "tenantId": "uuid", "name": "Coco Cosmetics" } ]
+}
+
+Notes:
+	•	Refresh token is set as httpOnly cookie only after tenant selection (or single membership).
+
+⸻
+
+1.2 Select tenant
+
+POST /api/v1/auth/select-tenant
+
+Headers:
+	•	Authorization: Bearer <preAuthToken>
+
+Request:
+
+{ "tenantId": "uuid" }
+
+Response:
+
+{
+  "mode": "SIGNED_IN",
+  "tenant": { "tenantId": "uuid", "name": "..." },
+  "accessToken": "jwt",
+  "accessTokenExpiresInSeconds": 900
+}
+
+
+⸻
+
+1.3 Refresh
+
+POST /api/v1/auth/refresh
+	•	Uses refresh cookie
+	•	Refresh rotation enabled
+
+Response:
+
+{ "accessToken": "jwt", "accessTokenExpiresInSeconds": 900 }
+
+
+⸻
+
+1.4 Logout
+
+POST /api/v1/auth/logout
+
+Response:
+
+{ "ok": true }
+
+
+⸻
+
+1.5 Switch tenant
+
+POST /api/v1/auth/switch-tenant
+
+Request:
+
+{ "tenantId": "uuid" }
+
+Response:
+
+{
+  "tenant": { "tenantId": "uuid", "name": "..." },
+  "accessToken": "jwt",
+  "accessTokenExpiresInSeconds": 900
+}
+
+
+⸻
+
+2) Current User / Session Context
+
+2.1 Get current session context
+
+GET /api/v1/me
+
+Response:
+
+{
+  "user": { "id": "uuid", "email": "..." },
+  "tenant": { "tenantId": "uuid", "name": "..." },
+  "role": "ADMIN",
+  "capabilities": { "CAP_STORE": true, "CAP_SCHEDULING": false }
+}
+
+
+⸻
+
+3) Staff Management (Admin-only)
+
+3.1 List members
+
+GET /api/v1/tenants/{tenantId}/staff
+
+Query:
+	•	page, pageSize, q, sort=createdAt:desc
+
+Response:
+
+{
+  "data": [
+    { "membershipId": "uuid", "userId": "uuid", "email": "...", "role": "STAFF", "status": "ACTIVE" }
+  ],
+  "page": 1,
+  "pageSize": 20,
+  "total": 3
+}
+
+AuthZ:
+	•	STAFF_MANAGE
+
+⸻
+
+3.2 Invite member (by link)
+
+POST /api/v1/tenants/{tenantId}/staff/invite
+
+Request:
+
+{ "email": "staff@x.com", "role": "STAFF" }
+
+Response:
+
+{ "inviteId": "uuid", "inviteLink": "https://admin.../invite?token=...", "expiresAt": "...Z" }
+
+AuthZ:
+	•	STAFF_MANAGE
+
+Audit:
+	•	STAFF_INVITED
+
+⸻
+
+3.3 Change role
+
+PUT /api/v1/tenants/{tenantId}/staff/{membershipId}/role
+
+Request:
+
+{ "role": "EDITOR" }
+
+AuthZ:
+	•	STAFF_MANAGE
+
+Audit:
+	•	STAFF_ROLE_CHANGED
+
+⸻
+
+3.4 Disable member
+
+POST /api/v1/tenants/{tenantId}/staff/{membershipId}/disable
+
+Request:
+
+{ "reason": "..." }
+
+AuthZ:
+	•	STAFF_MANAGE
+
+Audit:
+	•	STAFF_DISABLED
+
+⸻
+
+4) Site Editing (Java → Payload Gateway)
+
+4.1 Get site settings
+
+GET /api/v1/tenants/{tenantId}/site/settings
+
+AuthZ:
+	•	SITE_EDIT (or view allowed if you decide later)
+
+Response:
+	•	Same shape as public settings
+
+⸻
+
+4.2 Update site settings
+
+PUT /api/v1/tenants/{tenantId}/site/settings
+
+AuthZ:
+	•	SITE_EDIT
+
+Audit:
+	•	UPDATE_SITE_SETTINGS
+
+⸻
+
+4.3 Get page
+
+GET /api/v1/tenants/{tenantId}/site/pages/{pageType}
+
+AuthZ:
+	•	SITE_EDIT
+
+⸻
+
+4.4 Update page
+
+PUT /api/v1/tenants/{tenantId}/site/pages/{pageType}
+
+AuthZ:
+	•	SITE_EDIT
+
+Audit:
+	•	UPDATE_PAGE_{pageType}
+
+⸻
+
+5) Store Management (CAP_STORE required)
+
+5.1 Categories
+
+List categories
+GET /api/v1/tenants/{tenantId}/categories
+
+Query:
+	•	page, pageSize, q, status, sort=sortOrder:asc|desc
+
+AuthZ:
+	•	CATEGORY_MANAGE
+
+⸻
+
+Create category
+POST /api/v1/tenants/{tenantId}/categories
+
+Request:
+
+{ "name": "Makeup", "slug": "makeup", "sortOrder": 10, "status": "ACTIVE" }
+
+AuthZ:
+	•	CATEGORY_MANAGE
+
+⸻
+
+Update category
+PUT /api/v1/tenants/{tenantId}/categories/{categoryId}
+
+AuthZ:
+	•	CATEGORY_MANAGE
+
+⸻
+
+Archive category
+POST /api/v1/tenants/{tenantId}/categories/{categoryId}/archive
+
+AuthZ:
+	•	CATEGORY_MANAGE
+
+⸻
+
+5.2 Products
+
+List products
+GET /api/v1/tenants/{tenantId}/products
+
+Query:
+	•	page, pageSize, q, status, primaryCategoryId, categoryId, sort
+
+AuthZ:
+	•	PRODUCT_MANAGE
+
+⸻
+
+Create product
+POST /api/v1/tenants/{tenantId}/products
+
+Request (MVP):
+
+{
+  "name": "Lipstick – Red",
+  "slug": "lipstick-red",
+  "shortDescription": "...",
+  "priceCents": 45000,
+  "currency": "COP",
+  "sku": null,
+  "primaryCategoryId": "uuid",
+  "categoryIds": ["uuid"],
+  "attributes": { "shade": "Red" },
+  "status": "DRAFT"
+}
+
+Notes:
+	•	SKU is auto-generated if null; editable later.
+
+AuthZ:
+	•	PRODUCT_MANAGE
+
+⸻
+
+Update product
+PUT /api/v1/tenants/{tenantId}/products/{productId}
+
+AuthZ:
+	•	PRODUCT_MANAGE
+
+⸻
+
+Archive product
+POST /api/v1/tenants/{tenantId}/products/{productId}/archive
+
+AuthZ:
+	•	PRODUCT_MANAGE
+
+⸻
+
+5.3 Product Images (Option A – Java owns)
+
+Upload image
+POST /api/v1/tenants/{tenantId}/products/{productId}/images
+	•	Multipart upload
+	•	Server stores in R2 and records metadata
+
+AuthZ:
+	•	PRODUCT_MEDIA_MANAGE
+
+Response:
+
+{ "mediaAssetId": "uuid", "url": "https://...", "isPrimary": false }
+
+
+⸻
+
+Reorder / set primary
+PUT /api/v1/tenants/{tenantId}/products/{productId}/images/order
+
+Request:
+
+{
+  "items": [
+    { "mediaAssetId": "uuid", "sortOrder": 0, "isPrimary": true },
+    { "mediaAssetId": "uuid", "sortOrder": 1, "isPrimary": false }
+  ]
+}
+
+AuthZ:
+	•	PRODUCT_MEDIA_MANAGE
+
+⸻
+
+Delete image
+DELETE /api/v1/tenants/{tenantId}/products/{productId}/images/{mediaAssetId}
+
+AuthZ:
+	•	PRODUCT_MEDIA_MANAGE
+
+⸻
+
+5.4 Linked Products (Pseudo-variants)
+
+Get linked group for a product
+GET /api/v1/tenants/{tenantId}/products/{productId}/linked-products
+
+AuthZ:
+	•	PRODUCT_MANAGE
+
+⸻
+
+Create or update linked group
+PUT /api/v1/tenants/{tenantId}/products/{productId}/linked-products
+
+Request:
+
+{
+  "groupName": "Coco Lipstick",
+  "optionName": "Color",
+  "items": [
+    { "productId": "uuid", "label": "Red", "sortOrder": 0, "isDefault": true },
+    { "productId": "uuid", "label": "Nude", "sortOrder": 1, "isDefault": false }
+  ]
+}
+
+Rules (locked):
+	•	All products must share same primaryCategoryId
+	•	One option dimension only
+	•	Product belongs to at most one group (MVP)
+
+AuthZ:
+	•	PRODUCT_MANAGE
+
+⸻
+
+6) Orders Operations (CAP_STORE required)
+
+6.1 List orders
+
+GET /api/v1/tenants/{tenantId}/orders
+
+Query:
+	•	page, pageSize
+	•	paymentStatus, fulfillmentStatus, paymentMethod, fulfillmentType, q
+	•	sort=createdAt:desc
+
+AuthZ:
+	•	ORDER_VIEW
+
+⸻
+
+6.2 Get order detail
+
+GET /api/v1/tenants/{tenantId}/orders/{orderId}
+
+AuthZ:
+	•	ORDER_VIEW
+
+Response includes:
+	•	items (snapshot fields)
+	•	customer
+	•	payment + fulfillment status
+	•	audit timeline/events
+
+⸻
+
+6.3 Confirm order
+
+POST /api/v1/tenants/{tenantId}/orders/{orderId}/confirm
+
+AuthZ:
+	•	ORDER_MANAGE
+
+Audit:
+	•	ORDER_STATUS_CHANGED
+
+⸻
+
+6.4 Update fulfillment status
+
+POST /api/v1/tenants/{tenantId}/orders/{orderId}/fulfillment-status
+
+Request:
+
+{ "toStatus": "FULFILLING", "note": "Preparing" }
+
+AuthZ:
+	•	ORDER_MANAGE
+
+Audit:
+	•	ORDER_STATUS_CHANGED
+
+⸻
+
+6.5 Mark payment as paid (offline)
+
+POST /api/v1/tenants/{tenantId}/orders/{orderId}/mark-paid
+
+Request:
+
+{ "note": "Received Nequi transfer" }
+
+AuthZ:
+	•	ORDER_MANAGE
+
+Audit:
+	•	PAYMENT_MARKED_PAID
+
+⸻
+
+6.6 Refund (full only MVP)
+
+POST /api/v1/tenants/{tenantId}/orders/{orderId}/refund
+
+Request:
+
+{ "reason": "Customer cancelled" }
+
+AuthZ:
+	•	REFUND_MANAGE
+
+Audit:
+	•	REFUND_EXECUTED
+
+⸻
+
+7) Payment Settings (Admin-only)
+
+7.1 Configure Wompi
+
+PUT /api/v1/tenants/{tenantId}/payments/wompi
+
+Request:
+
+{
+  "enabled": true,
+  "publicKey": "...",
+  "privateKey": "...",
+  "merchantId": "..."
+}
+
+AuthZ:
+	•	PAYMENT_SETTINGS_MANAGE
+
+Audit:
+	•	PAYMENT_SETTINGS_UPDATED
+
+Notes:
+	•	Keys must be stored encrypted/secret manager; never returned after save.
+
+⸻
+
+8) Error Handling (Locked)
+	•	All errors follow RFC7807-like structure with traceId.
+	•	401 for unauthenticated
+	•	403 for unauthorized
+	•	404 for not found within tenant scope
+	•	409 for conflicts (slug/sku uniqueness)
+	•	422 optional for validation; 400 acceptable for MVP
+
+⸻
+
+9) Final Locked Summary
+
+Merchant Admin uses /api/v1/... with tenant scoping in path and token.
+
+Locked endpoint areas:
+	•	Auth/session: login, select-tenant, refresh, logout, switch-tenant
+	•	Session context: /me
+	•	Staff management: list/invite/change role/disable
+	•	Site edit (Payload gateway): settings + pages
+	•	Store management: categories, products, images, linked products
+	•	Orders operations: list/detail/confirm/status changes/mark paid/refund
+	•	Payment settings (admin-only): Wompi config
+
+All endpoints align with:
+	•	centralized policy actions
+	•	capability gating (CAP_STORE)
+	•	audit event requirements
+	•	API conventions (pagination/filter/sort/errors)
+
+This specification is locked and implementation-ready.

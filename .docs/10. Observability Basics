@@ -1,0 +1,181 @@
+Observability Basics – Locked Specification (MVP)
+
+Scope
+
+This document locks the minimum viable observability for the platform.
+
+Constraints:
+	•	No expensive tools (Datadog/Elastic)
+	•	Must still support debugging real money/orders issues
+
+Chosen approach:
+	•	A) Lowest-cost, low-effort managed: Grafana Cloud free tier for logs/metrics (where possible)
+	•	Java produces structured logs + metrics + audit logs in Postgres
+
+⸻
+
+1) Logging (Locked)
+
+1.1 Structured JSON logs
+	•	All services emit JSON logs to stdout
+	•	Use Logback + JSON encoder
+
+1.2 Correlation fields (required)
+
+Every log line must include:
+	•	traceId (request correlation ID)
+	•	tenantId (nullable for public endpoints)
+	•	userId (nullable for public endpoints)
+	•	service (service/module name)
+	•	env (dev/stage/prod)
+	•	method, path, status, durationMs (for request logs)
+
+1.3 MDC propagation
+	•	Use SLF4J MDC to inject: traceId, tenantId, userId
+	•	Ensure MDC is cleared at request end
+
+1.4 Redaction (mandatory)
+
+Never log:
+	•	secrets (API keys)
+	•	payment tokens
+	•	full card data/CVV
+
+PII guidance:
+	•	Phone/email can be logged only when necessary for debugging
+	•	Prefer masking in logs; keep full values in DB records if needed
+
+⸻
+
+2) Request IDs (Locked)
+
+2.1 Trace ID generation
+	•	On every incoming request:
+	•	Read X-Trace-Id if provided
+	•	Otherwise generate UUID v4
+	•	Return X-Trace-Id on every response
+
+2.2 Trace ID usage
+	•	traceId must be included:
+	•	in all logs
+	•	in all error responses
+	•	in audit events (detail JSON)
+
+⸻
+
+3) Audit Logs (Locked)
+
+3.1 Audit logs live in Postgres
+
+Audit events are stored in a dedicated DB table and retained long-term.
+
+Required fields:
+	•	tenant_id, user_id (nullable for system/webhook)
+	•	action
+	•	resource_type, resource_id
+	•	detail (JSON)
+	•	created_at
+
+3.2 Sensitive actions to audit (locked list)
+	•	PAYMENT_MARKED_PAID
+	•	REFUND_EXECUTED
+	•	ORDER_STATUS_CHANGED
+	•	PAYMENT_SETTINGS_UPDATED
+	•	STAFF_INVITED
+	•	STAFF_ROLE_CHANGED
+	•	STAFF_DISABLED
+	•	SITE_PUBLISH (when publish is enabled)
+	•	DOMAIN_CHANGED (when domain module is implemented)
+
+Audit detail must include:
+	•	traceId
+	•	reason/note (when relevant)
+	•	old/new values for status transitions
+
+3.3 Retention
+	•	Audit events retained ≥ 365 days (minimum)
+
+⸻
+
+4) Metrics (Locked)
+
+4.1 Collection
+	•	Java services expose Prometheus-format metrics (Micrometer)
+
+4.2 Minimum metrics to track
+	•	HTTP request count, latency, error rate
+	•	Checkout/order creation failures
+	•	Payment webhook processing success/failure
+	•	Refund count
+
+4.3 Storage & dashboards
+	•	Use Grafana Cloud (free tier) for:
+	•	dashboards
+	•	alerts
+	•	logs (Loki)
+	•	metrics (Prometheus)
+
+⸻
+
+5) Rate Limiting (Locked)
+
+5.1 Applies to public endpoints
+
+Rate limit these endpoints:
+	•	public checkout initiation
+	•	public cart actions (if exposed)
+	•	payment initiation endpoints
+
+5.2 Enforcement points
+	•	Primary: Cloudflare edge rate-limits
+	•	Secondary: server-side token bucket (optional fallback)
+
+5.3 Default thresholds
+	•	Per IP: 10 checkout attempts / 1 minute
+	•	Per tenant: 100 checkout attempts / 10 minutes
+
+Response behavior:
+	•	HTTP 429
+	•	Include Retry-After
+	•	Include traceId
+
+⸻
+
+6) Alerts (Locked)
+
+6.1 Channels
+	•	Slack + Email (MVP)
+
+6.2 Minimum alert triggers
+	•	Payment webhook failures > 5 in 5 minutes
+	•	Checkout failure rate > 5% over 5 minutes
+	•	HTTP 5xx rate > 1% over 5 minutes
+	•	Latency p95 > 2s over 10 minutes
+
+⸻
+
+7) Retention & Cost Control (Locked)
+	•	High-volume service logs retained 14 days in Grafana Cloud (or configured free-tier limits)
+	•	Audit logs retained ≥ 365 days in Postgres
+	•	Optional: archive logs to Cloudflare R2 for cheap long-term storage
+
+⸻
+
+8) Implementation Requirements (Locked)
+	•	Add an HTTP filter/interceptor to set traceId + MDC + response header
+	•	Configure Logback JSON encoder
+	•	Add audit write helpers in services that perform sensitive actions
+	•	Add Micrometer Prometheus registry
+	•	Configure Cloudflare rate limiting rules for public checkout endpoints
+
+⸻
+
+9) Final Locked Summary
+	•	Approach: Grafana Cloud free tier for logs/metrics/dashboards/alerts
+	•	JSON structured logs with MDC correlation: traceId, tenantId, userId
+	•	X-Trace-Id generated/returned on every request
+	•	Postgres audit table for sensitive actions (≥ 1 year retention)
+	•	Rate limiting at Cloudflare edge (default thresholds defined)
+	•	Slack + Email alerts for payment/checkout failures
+
+This specification is locked and implementation-ready.

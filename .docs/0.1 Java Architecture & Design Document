@@ -1,0 +1,368 @@
+Java Architecture & Design Document – Modular Monolith MVP
+
+1. Overview
+
+This document describes the Java backend architecture for the multi-tenant platform, including:
+	•	Architectural style and patterns
+	•	Module boundaries and dependencies
+	•	Design patterns used per layer
+	•	Folder / package structure (filesystem)
+	•	Communication patterns (APIs + internal events)
+	•	Cross-cutting concerns (auth, tenancy, observability)
+
+The backend is a modular monolith designed to evolve into microservices later.
+
+⸻
+
+2. Architectural Style
+
+2.1 Modular Monolith (Option B)
+	•	Single deployable Spring Boot application
+	•	Clear module boundaries inside the codebase
+	•	Modules communicate via:
+	•	service interfaces
+	•	internal domain events (after-commit)
+
+2.2 Why this fits MVP
+	•	Faster iteration and lower operational cost
+	•	Strong boundaries reduce coupling
+	•	Event model already aligns with future Kafka/outbox
+
+⸻
+
+3. High-Level System Context
+
+3.1 External clients
+	•	Public Site (Astro): reads public APIs for catalog + site content + checkout
+	•	Merchant Admin (React SPA): uses authenticated APIs to manage catalog, orders, content, staff
+	•	Payload CMS: content store only; accessed via Java Content Gateway
+	•	Neon Postgres: primary database
+	•	Cloudflare R2: product image storage
+	•	Wompi: payment provider (tenant-owned accounts), webhook-driven confirmations
+
+3.2 Public vs Admin API separation
+	•	Public base: /api/public/v1/...
+	•	Admin base: /api/v1/...
+
+Tenant resolution:
+	•	Public: Host header primary + tenantSlug fallback endpoints
+	•	Admin: tenantId in path and token; must match
+
+⸻
+
+4. Module Map (Boundaries)
+
+4.1 Core modules (MVP)
+	•	tenancy: tenant resolution, TenantContext
+	•	auth: users, memberships, login, refresh rotation, invites/reset
+	•	policy: centralized authorization (roles → actions)
+	•	store: products, categories, images (R2), linked products
+	•	orders: order creation, fulfillment lifecycle, offline marking paid, refunds record
+	•	payments: PaymentProvider abstraction, payment attempts, Wompi integration, webhooks
+	•	content-gateway: safe allowlisted access to Payload for settings/pages
+	•	observability: structured logging, trace IDs, metrics hooks
+	•	events: internal event interfaces, after-commit publishing, consumption dedupe
+
+4.2 Deferred modules
+	•	domains: domain automation (deferred)
+	•	scheduling: services/availability/bookings (deferred)
+
+4.3 Dependency rule (enforced)
+	•	Modules may depend on:
+	•	shared kernel (common primitives)
+	•	policy/auth/tenancy as cross-cutting
+	•	Feature modules should not directly depend on each other’s persistence.
+	•	Cross-module coordination uses:
+	•	stable service interfaces
+	•	events
+
+⸻
+
+5. Layered Architecture (per module)
+
+Each module follows a conventional layered structure:
+	•	controller (API)
+	•	request validation
+	•	maps DTO ↔ service calls
+	•	never contains business rules
+	•	service (application/domain orchestration)
+	•	business workflows
+	•	state transitions
+	•	authorization checks via policy
+	•	emits domain events (after commit)
+	•	repository (data access)
+	•	tenant-scoped queries
+	•	returns domain models
+	•	model (domain)
+	•	entities / aggregates
+	•	value objects
+	•	enums for states
+	•	dto (API contracts)
+	•	request/response classes
+	•	mapper
+	•	DTO ↔ domain mapping
+	•	events
+	•	module event interfaces + event types
+	•	config
+	•	module configuration (beans, wiring)
+
+⸻
+
+6. Core Architectural Patterns
+
+6.1 Centralized Policy Authorization (Locked)
+	•	One place defines allowed actions
+	•	Roles map to actions
+	•	Controllers/services call policy checks
+
+Benefits:
+	•	Consistent permissions across the system
+	•	Easier to extend (new modules/actions)
+
+6.2 Capability Gating
+	•	Feature flags per tenant:
+	•	CAP_STORE, CAP_SCHEDULING (future)
+	•	Enforced in services and reflected in /me response
+
+6.3 Domain State Machines
+	•	Orders: fulfillment status separate from payment status
+	•	Payments: payment attempts are authoritative
+
+State transitions:
+	•	Enforced in service layer within a DB transaction
+	•	Invalid transitions → 409 conflict
+
+6.4 Ports & Adapters (inside monolith)
+	•	External systems accessed via interfaces:
+	•	PaymentProvider
+	•	PayloadClient
+	•	ObjectStorageClient
+
+Implementation can be swapped later (Kafka, different CMS, different storage).
+
+⸻
+
+7. Design Patterns Used
+
+7.1 Factory
+	•	PaymentProviderFactory selects provider implementation by tenant config
+
+7.2 Strategy
+	•	Provider-specific logic behind PaymentProvider interface
+
+7.3 Adapter
+	•	Payload integration via PayloadClient adapter
+	•	R2 integration via ObjectStorageClient
+
+7.4 Domain Events
+	•	After-commit publish via module event interfaces
+	•	Async consumers for side effects
+
+7.5 Idempotency
+	•	Idempotency keys for:
+	•	payment attempt creation
+	•	(optional) checkout order creation
+	•	Webhook dedupe + consumption table for side effects
+
+⸻
+
+8. Internal Event Model (Now) → Kafka (Later)
+
+8.1 Current (MVP)
+	•	Per-module publisher interfaces
+	•	After-commit publishing mandatory
+	•	At-least-once semantics
+	•	Idempotent handlers
+	•	event_consumptions for side effects
+
+8.2 Later
+	•	Replace publishers with Kafka producers
+	•	Add outbox when Kafka or guaranteed delivery is needed
+
+⸻
+
+9. Data Management
+
+9.1 Single schema + module-owned migrations
+	•	Liquibase SQL migrations
+	•	One schema
+	•	Module folders under db/changelog/<module>/...
+
+9.2 Tenant isolation
+	•	TenantContext derived from token
+	•	All tenant-owned tables include tenant_id
+	•	Repositories always filter by tenant_id
+
+⸻
+
+10. Observability
+
+10.1 Logging
+	•	JSON logs with MDC:
+	•	traceId, tenantId, userId, service, env
+
+10.2 Request IDs
+	•	X-Trace-Id generated/propagated
+
+10.3 Audit logs
+	•	Postgres audit table records sensitive actions:
+	•	mark paid, refunds, staff changes, payment settings
+
+10.4 Metrics & dashboards
+	•	Micrometer + Prometheus format
+	•	Grafana Cloud free tier for dashboards/alerts/logs (MVP)
+
+⸻
+
+11. Filesystem / Folder Structure (Locked Recommendation)
+
+11.1 Repository layout (single app)
+
+platform-api/
+  src/main/java/com/company/platform/
+    app/                     # application bootstrap
+      PlatformApplication.java
+
+    common/                  # shared kernel (no business coupling)
+      time/
+      money/
+      errors/                # problem+error model
+      pagination/
+      ids/
+      validation/
+
+    tenancy/
+      api/                   # host resolver utilities (public)
+      context/               # TenantContext + resolver
+      repository/
+      service/
+
+    policy/
+      model/                 # Role, Action
+      service/               # PolicyEngine
+
+    auth/
+      controller/
+      dto/
+      model/
+      repository/
+      service/
+      events/
+
+    store/
+      controller/
+      dto/
+      model/
+      repository/
+      service/
+      media/                 # R2 storage adapter usage
+      events/
+
+    orders/
+      controller/
+      dto/
+      model/
+      repository/
+      service/
+      events/
+
+    payments/
+      controller/
+      dto/
+      model/
+      repository/
+      service/
+      provider/              # PaymentProvider + Wompi
+      webhook/
+      events/
+
+    content/
+      controller/
+      dto/
+      model/
+      service/
+      payload/               # Payload client adapter
+      events/
+
+    events/
+      bus/                   # after-commit publisher + async dispatcher
+      consumption/           # event_consumptions helper
+      model/                 # base event envelope
+
+    observability/
+      logging/
+      metrics/
+      audit/
+      rate_limit/
+
+  src/main/resources/
+    application.yml
+    application-dev.yml
+    application-prod.yml
+
+    db/
+      changelog/
+        master.sql           # includes module changelogs
+        auth/
+        store/
+        orders/
+        payments/
+        content/
+        observability/
+
+  src/test/java/com/company/platform/
+    ... integration tests ...
+
+11.2 Naming conventions
+	•	Packages are lowercase
+	•	Controllers are thin
+	•	Services enforce policy + state machine
+	•	Repositories are tenant-scoped
+
+⸻
+
+12. API Package Separation
+
+Controllers are grouped by API surface:
+	•	Public controllers: /api/public/v1/...
+	•	Admin controllers: /api/v1/...
+
+Recommended:
+	•	controller/public/
+	•	controller/admin/
+
+This reduces accidental auth mistakes.
+
+⸻
+
+13. Security Basics
+	•	Strict CORS allowlist per environment
+	•	No secrets in logs
+	•	Webhooks verified by signature
+	•	Rate limiting on public checkout endpoints via Cloudflare
+
+⸻
+
+14. Development Guidelines
+
+14.1 Golden path tests (must have)
+	•	Tenant isolation
+	•	Auth refresh rotation
+	•	Order state transitions
+	•	Payment webhook idempotency
+
+14.2 Feature development flow
+	•	Add Liquibase migration
+	•	Add repository + service + controller
+	•	Add policy action checks
+	•	Emit events after commit
+	•	Add audit entry for sensitive actions
+	•	Add tests
+
+⸻
+
+15. Summary
+
+The Java backend uses a modular monolith with strict boundaries, centralized policy, after-commit internal events, and low-cost observability. It is intentionally designed to evolve to microservices/Kafka later without rework.
+
+This document is architectural reference + implementation guide for starting development.

@@ -1,0 +1,233 @@
+Payment Provider Abstraction & Wompi Integration – Locked Specification
+
+Scope
+
+This document fully locks the payment provider abstraction and the Wompi integration for the platform. It is implementation-ready and aligns with previously locked documents (Orders, Roles, API conventions, Observability).
+
+Goals:
+	•	Support offline payments (CASH / NEQUI / BANK_TRANSFER) + online PSP (Wompi) for MVP
+	•	Provide a pluggable PaymentProvider interface to add providers later
+	•	Securely handle webhooks, idempotency, and payment attempt lifecycle
+	•	Keep merchants in control; platform does not custody funds
+
+⸻
+
+1) High-level decisions (Locked)
+	•	Tenant-scoped PSP config: each tenant can enable/disable Wompi and store credentials in the secret manager; only ADMIN may manage. PAYMENT_SETTINGS_MANAGE governs it.
+	•	Order ↔ PaymentAttempt separation: Orders are created from checkout; PaymentAttempts represent attempts to pay an order (provider or offline). PaymentAttempt is the source of truth for payment lifecycle.
+	•	Idempotency: idempotency keys accepted for payment creation and enforced server-side.
+	•	Webhooks: provider webhooks (Wompi) are authoritative for payment confirmation; webhooks must be verified and processed idempotently.
+	•	Refunds: MVP supports full refunds recorded in the system. For Wompi, provider refund API support is implemented if tenant enables it; otherwise refunds are offline and recorded by merchant.
+
+⸻
+
+2) Concepts and Models (Locked)
+
+2.1 Key entities
+	•	orders (locked earlier) — business order
+	•	payment_attempts — record per attempt to pay an order
+	•	payments (optional alias) — ledger entries produced from confirmed attempts
+	•	payment_providers — tenant-scoped provider config metadata (not raw secrets)
+	•	refunds — refund records (for audit and reconciliation)
+
+2.2 PaymentAttempt fields (locked schema below)
+	•	id (UUID)
+	•	tenant_id (UUID)
+	•	order_id (UUID)
+	•	provider (NULL for offline) — e.g., WOMPI or OFFLINE_NEQUI
+	•	provider_attempt_id (nullable) — provider-side id (e.g., Wompi transaction id)
+	•	status — PENDING | PENDING_PROVIDER | PAID | FAILED | REFUNDED | CANCELLED
+	•	amount_cents (int)
+	•	currency (char3)
+	•	method — NEQUI|BANK_TRANSFER|CASH|WOMPI (string enum)
+	•	metadata JSONB — raw provider response or custom fields
+	•	idempotency_key (nullable) — dedupe key for creation
+	•	created_at, updated_at
+
+2.3 Payment status transitions (locked)
+	•	PENDING (created client-side/offline) → PENDING_PROVIDER (when provider session started) → PAID (webhook or manual mark) or FAILED.
+	•	Offline methods: PENDING → PAID when merchant marks paid.
+	•	Refunds: PAID → REFUNDED when refund recorded/confirmed.
+
+⸻
+
+3) DB Schema (Locked DDL)
+
+-- Payment providers config (metadata, NOT secrets)
+CREATE TABLE payment_providers (
+  id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  provider_key TEXT NOT NULL, -- e.g., 'WOMPI'
+  enabled BOOL NOT NULL DEFAULT FALSE,
+  config JSONB NULL, -- non-secret config/flags
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE UNIQUE INDEX ux_payment_providers_tenant_provider ON payment_providers(tenant_id, provider_key);
+
+-- Payment attempts
+CREATE TABLE payment_attempts (
+  id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  provider TEXT NULL,
+  provider_attempt_id TEXT NULL,
+  method TEXT NOT NULL,
+  amount_cents BIGINT NOT NULL CHECK (amount_cents >= 0),
+  currency CHAR(3) NOT NULL DEFAULT 'COP',
+  status TEXT NOT NULL, -- enum like PENDING,PENDING_PROVIDER,PAID,FAILED,REFUNDED,CANCELLED
+  metadata JSONB NULL,
+  idempotency_key TEXT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX idx_payment_attempts_order ON payment_attempts(order_id);
+CREATE INDEX idx_payment_attempts_tenant ON payment_attempts(tenant_id);
+CREATE UNIQUE INDEX ux_payment_attempts_idempo_tenant_order ON payment_attempts(tenant_id, idempotency_key, order_id) WHERE idempotency_key IS NOT NULL;
+
+-- Refunds (MVP full refunds only)
+CREATE TABLE refunds (
+  id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  payment_attempt_id UUID NULL REFERENCES payment_attempts(id),
+  amount_cents BIGINT NOT NULL,
+  method TEXT NOT NULL, -- OFFLINE or PROVIDER
+  provider_ref TEXT NULL,
+  status TEXT NOT NULL DEFAULT 'COMPLETED',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+Note: enforce tenant scoping at service layer; consider triggers later for DB-level tenant safety.
+
+⸻
+
+4) PaymentProvider Interface (Java) — Locked contract
+
+Define a Java interface that all providers implement.
+
+public interface PaymentProvider {
+  // start a payment attempt; returns provider-specific client params for frontend
+  ProviderPaymentResponse createPaymentAttempt(PaymentAttemptRequest req);
+
+  // Optional: call provider refund API
+  ProviderRefundResponse refund(String providerAttemptId, RefundRequest req);
+
+  // Verify webhook signature header + parse payload -> ProviderWebhookEvent
+  ProviderWebhookEvent parseAndVerifyWebhook(String rawBody, Map<String,String> headers) throws InvalidSignatureException;
+}
+
+ProviderPaymentResponse includes fields used by storefront e.g., clientParams.
+
+Providers must be stateless and idempotent-friendly (service layer enforces idempotency).
+
+⸻
+
+5) Wompi-specific integration (Locked)
+
+5.1 What Wompi provides (context)
+	•	Wompi is a Colombian PSP with widget-based client integration and server webhooks indicating payment state.
+	•	Wompi requires server-side signature verification for webhooks and provides transaction IDs and statuses.
+
+5.2 Wompi createPaymentAttempt flow (Locked)
+	1.	Merchant Admin configures Wompi keys (publicKey + privateKey) via PUT /payments/wompi (already locked in Admin API). Keys stored encrypted in secret manager.
+	2.	Frontend calls POST /api/public/v1/checkout/orders/{orderId}/payments with provider=WOMPI.
+	3.	Java validates order, amount, tenant, idempotency.
+	4.	Java creates payment_attempts row with status=PENDING_PROVIDER and idempotency_key if provided.
+	5.	Java calls Wompi API to create a payment session (server-side) or prepares clientParams for widget using publicKey/params signed by server.
+	6.	Java returns clientParams in response for storefront to render widget.
+	7.	User completes payment in Wompi UI; Wompi sends webhook to your /api/webhooks/wompi.
+
+5.3 Wompi webhook handling (Locked)
+	•	Webhook endpoint: POST /api/webhooks/wompi
+	•	Verification: validate signature / public key as per Wompi docs (verify X-Wompi-Signature or payload signature). If invalid → 401 and log.
+	•	Idempotency: provider event ID deduplicated. Store raw payload in payment_attempts.metadata or separate provider_webhook_logs table.
+	•	On transaction event with status APPROVED or AUTHORIZED per Wompi mapping → mark payment_attempts.status = PAID and update provider_attempt_id.
+	•	On FAILED/DECLINED → mark FAILED.
+	•	Create order_events / audit_events for PAYMENT_CONFIRMED with traceId.
+
+5.4 Security
+	•	Restrict webhook endpoint to POST only; validate TLS; check signature header; log sender IP and payload.
+	•	Rate limit webhooks to avoid DoS.
+
+5.5 Webhook idempotency & reconciliation
+	•	If webhook arrives and payment_attempts already marked PAID, simply acknowledge (200) and no duplicate processing.
+	•	If webhook arrives and no matching payment_attempt (edge case), create a reconciliation record and notify ops.
+
+⸻
+
+6) Idempotency & Duplicate Prevention (Locked)
+	•	Creation endpoints accept Idempotency-Key header. If present, server checks ux_payment_attempts_idempo_tenant_order and returns existing attempt.
+	•	For webhook events, dedupe on provider event_id (store in payment_attempts.metadata or separate provider_events table).
+	•	Use DB unique constraints + transactions to avoid races.
+
+⸻
+
+7) Admin Flows (Locked)
+	•	Mark order as paid (offline): Merchant Admin action POST /orders/{orderId}/mark-paid creates a payment_attempt with method=NEQUI|BANK_TRANSFER|CASH, status=PAID, provider=null, and records audit event PAYMENT_MARKED_PAID.
+	•	Configure Wompi: Admin provides publicKey and privateKey via PUT /payments/wompi. Private key stored encrypted; publicKey stored in DB for reference.
+	•	Trigger refund: Admin may call POST /orders/{orderId}/refund. If provider refund enabled and possible, Java calls provider refund API and records refunds row; otherwise merchant records offline refund and records refunds row with method=OFFLINE.
+
+⸻
+
+8) Refunds (Locked behavior)
+	•	Only full refunds supported in MVP.
+	•	Refunds create a refunds row and update payment_attempts to REFUNDED.
+	•	If provider supports refunds via API (Wompi), call provider refund endpoint; ensure idempotency and record provider response.
+	•	If provider refund fails or unsupported, merchant performs refund externally, then Admin records refund in Merchant Admin (audit required).
+
+⸻
+
+9) Webhook Endpoint Design (Locked)
+	•	Endpoint: POST /api/webhooks/wompi
+	•	No auth required other than signature verification
+	•	Consume raw body, parse JSON, verify signature, then enqueue processing job (async) for reliability
+	•	Return 200 quickly upon acceptance, 4xx on invalid signature
+	•	Processing job updates DB, produces order_events, and notifies merchant via Merchant Admin WebSocket/notification (optional)
+
+⸻
+
+10) Observability & Audit (Locked)
+	•	Log every provider call with traceId, tenantId, orderId, provider, providerAttemptId
+	•	Store raw webhook payload in payment_attempts.metadata or separate provider_webhook_logs for debugging (redact sensitive fields)
+	•	Audit events required: PAYMENT_ATTEMPT_CREATED, PAYMENT_CONFIRMED, PAYMENT_FAILED, REFUND_EXECUTED.
+
+⸻
+
+11) Error Handling & Retries (Locked)
+	•	For provider API calls, use exponential backoff with jitter (retry 3 times) for transient errors
+	•	If provider createPaymentAttempt fails definitively, mark attempt FAILED and surface user-friendly error to frontend
+	•	Webhook processing must be idempotent; if processing job fails, schedule retry with dead-letter queue and notify ops
+
+⸻
+
+12) Testing & QA (Locked)
+	•	Unit tests for PaymentProvider implementations (mock provider API responses)
+	•	Integration tests using Wompi sandbox/test credentials
+	•	Webhook replay tests: store sample webhook payloads and add end-to-end test that verifies DB transitions
+	•	Test idempotency by replaying same webhook/event
+
+⸻
+
+13) Secrets & Config (Locked)
+	•	Tenant PSP private keys must be stored in secret manager (Cloudflare Secrets / HashiCorp Vault / platform secret store)
+	•	Payment provider config in DB references secrets by keyName but does NOT store raw secret plain text
+	•	Admin UI for keys: accept keys but do not show them back (return 204 after save)
+
+⸻
+
+14) Minimal API Surface (Locked)
+	•	POST /api/public/v1/checkout/orders/{orderId}/payments — create payment attempt (client-facing)
+	•	POST /api/webhooks/wompi — webhook receiver
+	•	PUT /api/v1/tenants/{tenantId}/payments/wompi — Admin config
+	•	Internal: provider service factory wiring and event processing queue
+
+⸻
+
+15) Final Locked Summary
+	•	PaymentAttempt is the authoritative payment record and maps to Orders
+	•	Wompi integration uses server-side verification + webhooks to mark payments PAID
+	•	Idempotency, signature verification, audit logs, and retries are required
+	•	Admin can record offline payments and refunds; Wompi refunds optional if enabled
+	•	Secrets stored securely; provider config tenant-scoped and Admin-only
+
+This specification is locked and implementation-ready
