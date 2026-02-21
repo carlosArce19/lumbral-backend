@@ -35,3 +35,6 @@ build/
 ### Macos
 *.log
 .DS_Store
+
+### Local env (secrets)
+.env

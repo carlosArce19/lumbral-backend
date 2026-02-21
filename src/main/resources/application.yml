@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: lumbral-backend
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null
+  liquibase:
+    change-log: classpath:db/changelog/master.xml
+
+server:
+  error:
+    include-stacktrace: never
+
+app:
+  cors:
+    # Comma-separated origins; set per profile (e.g. http://localhost:3000 for dev).
+    allowed-origins: ""
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized

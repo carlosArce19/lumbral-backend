@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+	<include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+	<springProperty name="appName" source="spring.application.name" defaultValue="lumbral-backend"/>
+	<springProfile name="dev">
+		<appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+			<encoder class="net.logstash.logback.encoder.LogstashEncoder">
+				<includeMdcKeyName>traceId</includeMdcKeyName>
+				<includeMdcKeyName>tenantId</includeMdcKeyName>
+				<includeMdcKeyName>userId</includeMdcKeyName>
+				<customFields>{"service":"${appName}","env":"dev"}</customFields>
+			</encoder>
+		</appender>
+		<root level="INFO">
+			<appender-ref ref="CONSOLE"/>
+		</root>
+	</springProfile>
+	<springProfile name="prod">
+		<appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+			<encoder class="net.logstash.logback.encoder.LogstashEncoder">
+				<includeMdcKeyName>traceId</includeMdcKeyName>
+				<includeMdcKeyName>tenantId</includeMdcKeyName>
+				<includeMdcKeyName>userId</includeMdcKeyName>
+				<customFields>{"service":"${appName}","env":"prod"}</customFields>
+			</encoder>
+		</appender>
+		<root level="INFO">
+			<appender-ref ref="CONSOLE"/>
+		</root>
+	</springProfile>
+	<springProfile name="test">
+		<appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+			<encoder class="net.logstash.logback.encoder.LogstashEncoder">
+				<includeMdcKeyName>traceId</includeMdcKeyName>
+				<includeMdcKeyName>tenantId</includeMdcKeyName>
+				<includeMdcKeyName>userId</includeMdcKeyName>
+				<customFields>{"service":"${appName}","env":"test"}</customFields>
+			</encoder>
+		</appender>
+		<root level="INFO">
+			<appender-ref ref="CONSOLE"/>
+		</root>
+	</springProfile>
+	<!-- Fallback when no profile (e.g. default) -->
+	<springProfile name="!dev &amp; !prod &amp; !test">
+		<appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+			<encoder class="net.logstash.logback.encoder.LogstashEncoder">
+				<includeMdcKeyName>traceId</includeMdcKeyName>
+				<includeMdcKeyName>tenantId</includeMdcKeyName>
+				<includeMdcKeyName>userId</includeMdcKeyName>
+				<customFields>{"service":"${appName}","env":"default"}</customFields>
+			</encoder>
+		</appender>
+		<root level="INFO">
+			<appender-ref ref="CONSOLE"/>
+		</root>
+	</springProfile>
+</configuration>

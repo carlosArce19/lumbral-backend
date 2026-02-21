@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:lumbral_dev}
+    username: ${DB_USER:lumbral}
+    password: ${DB_PASSWORD:lumbral}
+    hikari:
+      maximum-pool-size: 5
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
