@@ -1,16 +1,20 @@
 package app.lumbral.backend.auth.controller;
 
 import app.lumbral.backend.auth.dto.AcceptInviteRequest;
+import app.lumbral.backend.auth.dto.ForgotPasswordRequest;
 import app.lumbral.backend.auth.dto.LoginRequest;
 import app.lumbral.backend.auth.dto.LoginResponse;
 import app.lumbral.backend.auth.dto.LogoutResponse;
+import app.lumbral.backend.auth.dto.PasswordActionResponse;
 import app.lumbral.backend.auth.dto.RefreshResponse;
+import app.lumbral.backend.auth.dto.ResetPasswordRequest;
 import app.lumbral.backend.auth.dto.SelectTenantRequest;
 import app.lumbral.backend.auth.dto.SwitchTenantResponse;
 import app.lumbral.backend.auth.service.AuthService;
 import app.lumbral.backend.auth.service.AuthService.LoginResult;
 import app.lumbral.backend.auth.service.InvalidTokenException;
 import app.lumbral.backend.auth.service.InviteService;
+import app.lumbral.backend.auth.service.PasswordResetService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
@@ -24,13 +28,16 @@ public class AuthController {
 
     private final AuthService authService;
     private final InviteService inviteService;
+    private final PasswordResetService passwordResetService;
     private final boolean cookieSecure;
 
     public AuthController(AuthService authService,
                           InviteService inviteService,
+                          PasswordResetService passwordResetService,
                           @Value("${app.jwt.refresh-cookie-secure}") boolean cookieSecure) {
         this.authService = authService;
         this.inviteService = inviteService;
+        this.passwordResetService = passwordResetService;
         this.cookieSecure = cookieSecure;
     }
 
@@ -81,6 +88,18 @@ public class AuthController {
     public ResponseEntity<LoginResponse> acceptInvite(@Valid @RequestBody AcceptInviteRequest request) {
         LoginResult.SignedIn result = inviteService.acceptInvite(request.token(), request.password());
         return toResponse(result);
+    }
+
+    @PostMapping("/password/forgot")
+    public ResponseEntity<PasswordActionResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        passwordResetService.requestReset(request.email());
+        return ResponseEntity.ok(new PasswordActionResponse(true));
+    }
+
+    @PostMapping("/password/reset")
+    public ResponseEntity<PasswordActionResponse> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        passwordResetService.resetPassword(request.token(), request.newPassword());
+        return ResponseEntity.ok(new PasswordActionResponse(true));
     }
 
     @PostMapping("/switch-tenant")

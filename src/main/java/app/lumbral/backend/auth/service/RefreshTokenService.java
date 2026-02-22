@@ -103,6 +103,11 @@ public class RefreshTokenService {
         repository.revokeAllByUserIdAndTenantId(userId, tenantId, Instant.now());
     }
 
+    @Transactional
+    public void revokeAllForUser(UUID userId) {
+        repository.revokeAllByUserId(userId, Instant.now());
+    }
+
     private RefreshToken resolveToken(String rawToken) {
         byte[] rawBytes;
         try {
