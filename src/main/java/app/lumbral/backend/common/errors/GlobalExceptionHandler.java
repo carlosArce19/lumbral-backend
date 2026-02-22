@@ -1,10 +1,13 @@
 package app.lumbral.backend.common.errors;
 
+import app.lumbral.backend.auth.service.AuthException;
+import app.lumbral.backend.auth.service.InvalidTokenException;
 import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
@@ -59,6 +62,45 @@ public class GlobalExceptionHandler {
 				request.getDescription(false).replace("uri=", ""),
 				traceId);
 		return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body);
+	}
+
+	@ExceptionHandler(AuthException.class)
+	public ResponseEntity<ApiError> handleAuth(AuthException ex, WebRequest request) {
+		String traceId = getTraceId();
+		ApiError body = ApiError.of(
+				PROBLEM_BASE + ex.getProblemType(),
+				ex.getTitle(),
+				ex.getHttpStatus(),
+				ex.getMessage(),
+				request.getDescription(false).replace("uri=", ""),
+				traceId);
+		return ResponseEntity.status(ex.getHttpStatus()).body(body);
+	}
+
+	@ExceptionHandler(InvalidTokenException.class)
+	public ResponseEntity<ApiError> handleInvalidToken(InvalidTokenException ex, WebRequest request) {
+		String traceId = getTraceId();
+		ApiError body = ApiError.of(
+				PROBLEM_BASE + "invalid-token",
+				"Invalid token",
+				HttpStatus.UNAUTHORIZED.value(),
+				ex.getMessage(),
+				request.getDescription(false).replace("uri=", ""),
+				traceId);
+		return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(body);
+	}
+
+	@ExceptionHandler(ServletRequestBindingException.class)
+	public ResponseEntity<ApiError> handleBinding(ServletRequestBindingException ex, WebRequest request) {
+		String traceId = getTraceId();
+		ApiError body = ApiError.of(
+				PROBLEM_BASE + "bad-request",
+				"Bad request",
+				HttpStatus.BAD_REQUEST.value(),
+				ex.getMessage(),
+				request.getDescription(false).replace("uri=", ""),
+				traceId);
+		return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
 	}
 
 	@ExceptionHandler(Exception.class)
