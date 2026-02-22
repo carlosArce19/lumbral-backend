@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "skills": {
+    "architecture-review": {
+      "source": "srstomp/pokayokay",
+      "sourceType": "github",
+      "computedHash": "f6e093f62f6233c3de305220cb41d9ca9649f816c8089a9ec26f7fe677384916"
+    },
+    "domain-modeling": {
+      "source": "jwilger/agent-skills",
+      "sourceType": "github",
+      "computedHash": "02b8c134939e0955c284ed07b6e3a1a5d217f4dd321597123c5b8e00848064a0"
+    },
+    "jpa-patterns": {
+      "source": "affaan-m/everything-claude-code",
+      "sourceType": "github",
+      "computedHash": "f14dd431dee2e1cb048c609ba60565c0ce57e4136df4862cfab63addf13385be"
+    }
+  }
+}
