@@ -20,6 +20,12 @@ app:
   cors:
     # Comma-separated origins; set per profile (e.g. http://localhost:3000 for dev).
     allowed-origins: ""
+  jwt:
+    secret: "${JWT_SECRET:CHANGE_ME_IN_PRODUCTION_min_32_chars_long!!}"
+    access-token-ttl: 15m
+    pre-auth-token-ttl: 5m
+    refresh-token-ttl: 14h
+    refresh-cookie-secure: ${JWT_COOKIE_SECURE:true}
 
 management:
   endpoints:
