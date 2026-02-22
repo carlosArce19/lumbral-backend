@@ -19,6 +19,12 @@ import java.util.UUID;
 @Service
 public class RefreshTokenService {
 
+    public record RotationResult(String newRawToken, UUID userId, UUID tenantId) {
+    }
+
+    public record TokenOwner(UUID userId, UUID tenantId) {
+    }
+
     private final RefreshTokenRepository repository;
     private final Duration refreshTokenTtl;
     private final SecureRandom secureRandom = new SecureRandom();
@@ -49,17 +55,8 @@ public class RefreshTokenService {
     }
 
     @Transactional(noRollbackFor = RefreshTokenReusedException.class)
-    public String rotateRefreshToken(String rawToken) {
-        byte[] rawBytes;
-        try {
-            rawBytes = Base64.getUrlDecoder().decode(rawToken);
-        } catch (IllegalArgumentException e) {
-            throw new InvalidTokenException("Invalid refresh token format");
-        }
-
-        String tokenHash = sha256Hex(rawBytes);
-        RefreshToken oldToken = repository.findByTokenHash(tokenHash)
-                .orElseThrow(() -> new InvalidTokenException("Refresh token not found"));
+    public RotationResult rotateRefreshToken(String rawToken) {
+        RefreshToken oldToken = resolveToken(rawToken);
 
         if (oldToken.getRevokedAt() != null) {
             UUID userId = oldToken.getUser().getId();
@@ -90,12 +87,33 @@ public class RefreshTokenService {
 
         repository.save(newToken);
 
-        return newRawToken;
+        return new RotationResult(newRawToken,
+                oldToken.getUser().getId(),
+                oldToken.getTenant().getId());
+    }
+
+    @Transactional(readOnly = true)
+    public TokenOwner findTokenOwner(String rawToken) {
+        RefreshToken token = resolveToken(rawToken);
+        return new TokenOwner(token.getUser().getId(), token.getTenant().getId());
     }
 
     @Transactional
     public void revokeAllForUserAndTenant(UUID userId, UUID tenantId) {
         repository.revokeAllByUserIdAndTenantId(userId, tenantId, Instant.now());
+    }
+
+    private RefreshToken resolveToken(String rawToken) {
+        byte[] rawBytes;
+        try {
+            rawBytes = Base64.getUrlDecoder().decode(rawToken);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidTokenException("Invalid refresh token format");
+        }
+
+        String tokenHash = sha256Hex(rawBytes);
+        return repository.findByTokenHash(tokenHash)
+                .orElseThrow(() -> new InvalidTokenException("Refresh token not found"));
     }
 
     private static String sha256Hex(byte[] bytes) {

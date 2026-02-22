@@ -42,6 +42,10 @@ public class AuthService {
         this.accessTokenExpiresInSeconds = (int) accessTokenTtl.toSeconds();
     }
 
+    public record RefreshResult(String accessToken, int accessTokenExpiresInSeconds,
+                                String refreshToken) {
+    }
+
     public sealed interface LoginResult {
         record SignedIn(String accessToken, int accessTokenExpiresInSeconds,
                         String refreshToken, TenantSummary tenant) implements LoginResult {
@@ -112,6 +116,72 @@ public class AuthService {
         if (membership.getStatus() != MembershipStatus.ACTIVE) {
             throw AuthException.membershipNotFound();
         }
+
+        return buildSignedIn(user, membership);
+    }
+
+    @Transactional(noRollbackFor = RefreshTokenReusedException.class)
+    public RefreshResult refresh(String rawRefreshToken) {
+        RefreshTokenService.RotationResult rot = refreshTokenService.rotateRefreshToken(rawRefreshToken);
+
+        User user = userRepository.findById(rot.userId())
+                .orElseThrow(AuthException::invalidCredentials);
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            throw AuthException.invalidCredentials();
+        }
+
+        TenantMembership membership = membershipRepository
+                .findByUser_IdAndTenant_Id(rot.userId(), rot.tenantId())
+                .orElseThrow(AuthException::noActiveMembership);
+        if (membership.getStatus() != MembershipStatus.ACTIVE) {
+            throw AuthException.noActiveMembership();
+        }
+
+        String accessToken = jwtService.generateAccessToken(
+                user.getId(),
+                membership.getTenant().getId(),
+                membership.getRole(),
+                membership.getId());
+
+        return new RefreshResult(accessToken, accessTokenExpiresInSeconds, rot.newRawToken());
+    }
+
+    public void logout(String rawRefreshToken) {
+        if (rawRefreshToken == null) {
+            return;
+        }
+        try {
+            RefreshTokenService.TokenOwner owner = refreshTokenService.findTokenOwner(rawRefreshToken);
+            refreshTokenService.revokeAllForUserAndTenant(owner.userId(), owner.tenantId());
+        } catch (Exception ignored) {
+        }
+    }
+
+    @Transactional
+    public LoginResult.SignedIn switchTenant(String bearerToken, UUID newTenantId) {
+        Claims claims = jwtService.parseAndValidate(bearerToken);
+
+        if (jwtService.getTokenType(claims) != TokenType.ACCESS) {
+            throw new InvalidTokenException("Expected an access token.");
+        }
+
+        UUID userId = jwtService.getUserId(claims);
+        UUID currentTenantId = jwtService.getTenantId(claims);
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(AuthException::invalidCredentials);
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            throw AuthException.invalidCredentials();
+        }
+
+        TenantMembership membership = membershipRepository
+                .findByUser_IdAndTenant_Id(userId, newTenantId)
+                .orElseThrow(AuthException::membershipNotFound);
+        if (membership.getStatus() != MembershipStatus.ACTIVE) {
+            throw AuthException.membershipNotFound();
+        }
+
+        refreshTokenService.revokeAllForUserAndTenant(userId, currentTenantId);
 
         return buildSignedIn(user, membership);
     }

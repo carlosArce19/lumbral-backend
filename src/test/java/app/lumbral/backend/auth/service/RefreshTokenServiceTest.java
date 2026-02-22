@@ -130,10 +130,10 @@ class RefreshTokenServiceTest {
         when(repository.save(any(RefreshToken.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
 
-        String newRawToken = service.rotateRefreshToken(rawToken);
+        RefreshTokenService.RotationResult result = service.rotateRefreshToken(rawToken);
 
-        assertThat(newRawToken).isNotBlank();
-        assertThat(newRawToken).isNotEqualTo(rawToken);
+        assertThat(result.newRawToken()).isNotBlank();
+        assertThat(result.newRawToken()).isNotEqualTo(rawToken);
         assertThat(oldToken.getRevokedAt()).isNotNull();
 
         verify(repository, times(2)).save(any(RefreshToken.class));

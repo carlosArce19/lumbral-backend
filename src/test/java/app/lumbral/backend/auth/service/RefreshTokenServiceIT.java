@@ -81,7 +81,8 @@ class RefreshTokenServiceIT {
     @Test
     void rotateCreatesNewAndRevokesOld() {
         String oldRaw = refreshTokenService.createRefreshToken(testUser, testTenant);
-        String newRaw = refreshTokenService.rotateRefreshToken(oldRaw);
+        RefreshTokenService.RotationResult result = refreshTokenService.rotateRefreshToken(oldRaw);
+        String newRaw = result.newRawToken();
 
         assertThat(newRaw).isNotEqualTo(oldRaw);
 
