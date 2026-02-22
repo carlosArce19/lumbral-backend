@@ -4,6 +4,19 @@
 	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
 	xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
 		https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+	<!-- auth module -->
 	<include file="db/changelog/auth/0000_init.sql" relativeToChangelogFile="false"/>
+	<include file="db/changelog/auth/001_create_users.sql" relativeToChangelogFile="false"/>
+	<include file="db/changelog/auth/002_create_tenants.sql" relativeToChangelogFile="false"/>
+	<include file="db/changelog/auth/003_create_tenant_memberships.sql" relativeToChangelogFile="false"/>
+	<include file="db/changelog/auth/004_create_refresh_tokens.sql" relativeToChangelogFile="false"/>
+	<include file="db/changelog/auth/005_create_invites.sql" relativeToChangelogFile="false"/>
+	<include file="db/changelog/auth/006_create_password_resets.sql" relativeToChangelogFile="false"/>
+
+	<!-- observability module -->
 	<include file="db/changelog/observability/0000_init.sql" relativeToChangelogFile="false"/>
+	<include file="db/changelog/observability/001_create_audit_logs.sql" relativeToChangelogFile="false"/>
+	<include file="db/changelog/observability/002_create_event_consumptions.sql" relativeToChangelogFile="false"/>
+
 </databaseChangeLog>
