@@ -1,5 +1,6 @@
 package app.lumbral.backend.auth.controller;
 
+import app.lumbral.backend.auth.dto.AcceptInviteRequest;
 import app.lumbral.backend.auth.dto.LoginRequest;
 import app.lumbral.backend.auth.dto.LoginResponse;
 import app.lumbral.backend.auth.dto.LogoutResponse;
@@ -9,6 +10,7 @@ import app.lumbral.backend.auth.dto.SwitchTenantResponse;
 import app.lumbral.backend.auth.service.AuthService;
 import app.lumbral.backend.auth.service.AuthService.LoginResult;
 import app.lumbral.backend.auth.service.InvalidTokenException;
+import app.lumbral.backend.auth.service.InviteService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
@@ -21,11 +23,14 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
+    private final InviteService inviteService;
     private final boolean cookieSecure;
 
     public AuthController(AuthService authService,
+                          InviteService inviteService,
                           @Value("${app.jwt.refresh-cookie-secure}") boolean cookieSecure) {
         this.authService = authService;
+        this.inviteService = inviteService;
         this.cookieSecure = cookieSecure;
     }
 
@@ -70,6 +75,12 @@ public class AuthController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, buildClearRefreshCookie().toString())
                 .body(new LogoutResponse(true));
+    }
+
+    @PostMapping("/invites/accept")
+    public ResponseEntity<LoginResponse> acceptInvite(@Valid @RequestBody AcceptInviteRequest request) {
+        LoginResult.SignedIn result = inviteService.acceptInvite(request.token(), request.password());
+        return toResponse(result);
     }
 
     @PostMapping("/switch-tenant")

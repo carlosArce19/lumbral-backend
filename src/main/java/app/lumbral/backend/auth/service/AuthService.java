@@ -79,7 +79,7 @@ public class AuthService {
         }
 
         if (memberships.size() == 1) {
-            return buildSignedIn(user, memberships.getFirst());
+            return issueSignedIn(user, memberships.getFirst());
         }
 
         List<TenantSummary> tenants = memberships.stream()
@@ -117,7 +117,7 @@ public class AuthService {
             throw AuthException.membershipNotFound();
         }
 
-        return buildSignedIn(user, membership);
+        return issueSignedIn(user, membership);
     }
 
     @Transactional(noRollbackFor = RefreshTokenReusedException.class)
@@ -183,10 +183,10 @@ public class AuthService {
 
         refreshTokenService.revokeAllForUserAndTenant(userId, currentTenantId);
 
-        return buildSignedIn(user, membership);
+        return issueSignedIn(user, membership);
     }
 
-    private LoginResult.SignedIn buildSignedIn(User user, TenantMembership membership) {
+    public LoginResult.SignedIn issueSignedIn(User user, TenantMembership membership) {
         String accessToken = jwtService.generateAccessToken(
                 user.getId(),
                 membership.getTenant().getId(),

@@ -30,4 +30,9 @@ public class AuthException extends RuntimeException {
         return new AuthException("membership-not-found", "Membership not found",
                 403, "User is not an active member of the requested tenant.");
     }
+
+    public static AuthException inviteAlreadyAccepted() {
+        return new AuthException("invite-already-accepted", "Invite already accepted",
+                409, "This invite has already been accepted.");
+    }
 }
