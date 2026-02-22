@@ -18,6 +18,8 @@ public record ApiError(
 		String traceId,
 		List<FieldError> errors
 ) {
+	public static final String PROBLEM_BASE = "https://api.lumbral.app/problems/";
+
 	public static ApiError of(String type, String title, int status, String detail, String instance, String traceId) {
 		return new ApiError(type, title, status, detail, instance, traceId, null);
 	}

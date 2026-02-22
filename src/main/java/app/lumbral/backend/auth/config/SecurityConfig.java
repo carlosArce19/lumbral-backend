@@ -1,5 +1,10 @@
 package app.lumbral.backend.auth.config;
 
+import app.lumbral.backend.auth.filter.JwtAuthenticationEntryPoint;
+import app.lumbral.backend.auth.filter.JwtAuthenticationFilter;
+import app.lumbral.backend.auth.repository.TenantMembershipRepository;
+import app.lumbral.backend.auth.service.JwtService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -10,6 +15,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -26,18 +32,32 @@ public class SecurityConfig {
 	private String allowedOriginsConfig;
 
 	@Bean
-	public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+	public JwtAuthenticationFilter jwtAuthenticationFilter(JwtService jwtService,
+														   TenantMembershipRepository membershipRepository,
+														   ObjectMapper objectMapper) {
+		return new JwtAuthenticationFilter(jwtService, membershipRepository, objectMapper);
+	}
+
+	@Bean
+	public JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint(ObjectMapper objectMapper) {
+		return new JwtAuthenticationEntryPoint(objectMapper);
+	}
+
+	@Bean
+	public SecurityFilterChain securityFilterChain(HttpSecurity http,
+												   JwtAuthenticationFilter jwtFilter,
+												   JwtAuthenticationEntryPoint entryPoint) throws Exception {
 		return http
 				.csrf(AbstractHttpConfigurer::disable)
 				.logout(AbstractHttpConfigurer::disable)
 				.cors(cors -> cors.configurationSource(corsConfigurationSource()))
 				.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+				.exceptionHandling(ex -> ex.authenticationEntryPoint(entryPoint))
+				.addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
 				.authorizeHttpRequests(auth -> auth
 						.requestMatchers("/actuator/health/**").permitAll()
 						.requestMatchers("/api/public/**").permitAll()
-						.requestMatchers("/api/v1/auth/login", "/api/v1/auth/refresh",
-								"/api/v1/auth/select-tenant", "/api/v1/auth/logout",
-								"/api/v1/auth/switch-tenant").permitAll()
+						.requestMatchers("/api/v1/auth/**").permitAll()
 						.anyRequest().authenticated())
 				.build();
 	}

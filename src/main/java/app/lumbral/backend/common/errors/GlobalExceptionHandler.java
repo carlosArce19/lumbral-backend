@@ -22,7 +22,7 @@ import java.util.stream.Collectors;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-	private static final String PROBLEM_BASE = "https://api.lumbral.app/problems/";
+	private static final String PROBLEM_BASE = ApiError.PROBLEM_BASE;
 	private static final String TRACE_ID_MDC = "traceId";
 	private static final String REFRESH_PATH = "/api/v1/auth/refresh";
 
@@ -64,6 +64,19 @@ public class GlobalExceptionHandler {
 				"Forbidden",
 				HttpStatus.FORBIDDEN.value(),
 				"Access denied.",
+				extractPath(request),
+				getTraceId());
+		return buildErrorResponse(body, HttpStatus.FORBIDDEN.value(), request);
+	}
+
+	@ExceptionHandler(app.lumbral.backend.policy.AccessDeniedException.class)
+	public ResponseEntity<ApiError> handlePolicyDenied(
+			app.lumbral.backend.policy.AccessDeniedException ex, WebRequest request) {
+		ApiError body = ApiError.of(
+				PROBLEM_BASE + "access-denied",
+				"Access denied",
+				HttpStatus.FORBIDDEN.value(),
+				ex.getReason().name() + ": " + ex.getAction().name(),
 				extractPath(request),
 				getTraceId());
 		return buildErrorResponse(body, HttpStatus.FORBIDDEN.value(), request);
